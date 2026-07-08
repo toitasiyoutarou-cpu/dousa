@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>YT Serve Click Analyzer v5</title>
+  <title>YT Serve Click Analyzer v6</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 <header class="app-header">
   <div>
     <p class="eyebrow">YouTube Click Analysis / Volleyball Serve</p>
-    <h1>YT Serve Analyzer</h1>
+    <h1>YT Serve Analyzer v6</h1>
     <p class="subtitle">YouTube動画の上からクリックして、サーブの軌道・打点・左右ズレ・回転推定を記録する分析アプリ</p>
   </div>
   <div class="header-actions">
@@ -27,7 +27,7 @@
         <input id="playerName" placeholder="例：〇〇選手 フローターサーブ" />
       </label>
       <label>YouTube URL
-        <input id="youtubeUrl" placeholder="https://www.youtube.com/watch?v=..." />
+        <input id="youtubeUrl" placeholder="https://www.youtube.com/watch?v=... / shorts URLも可" />
       </label>
       <label>動画FPS（推定）
         <input id="fps" type="number" step="0.01" value="30" />
@@ -35,16 +35,17 @@
     </div>
     <div class="tool-row">
       <button id="loadYoutube" class="primary">動画を表示</button>
-      <button id="toggleClick" class="accent">クリック解析：ON</button>
+      <button id="toggleClick">クリック解析：OFF</button>
       <button id="clearAll">全データ削除</button>
     </div>
-    <p class="hint">YouTube映像そのものを自動取得するのではなく、動画の上に透明キャンバスを重ね、クリック位置と時刻を記録します。クリック解析ONの間はYouTube本体の操作を遮るため、下の再生ボタンを使います。</p>
+    <div id="statusBox" class="summary-chip" style="margin-top:12px;display:inline-block;">待機中</div>
+    <p class="hint">v6はまず通常のiframeとして動画を表示し、その後YouTube APIで再生時刻を取得します。動画が表示されたら、動画操作は「クリック解析OFF」、記録するときだけ「ON」にしてください。</p>
   </section>
 
   <section class="card">
     <div class="section-title"><span>2</span><h2>再生・クリック解析</h2></div>
     <div class="video-shell">
-      <div id="ytPlayer"></div>
+      <div id="ytHost" class="yt-host"><p class="yt-placeholder">ここにYouTube動画が表示されます</p></div>
       <canvas id="overlay"></canvas>
     </div>
 
@@ -130,12 +131,12 @@
     <div class="card">
       <div class="section-title"><span>6</span><h2>軌道グラフ</h2></div>
       <canvas id="trajectoryChart" height="280"></canvas>
-      <p class="hint">クリックしたボール位置を時間順に線でつなぎます。中心線を設定すると左右ズレの解釈がしやすくなります。</p>
+      <p class="hint">クリックしたボール位置を時間順に線でつなぎます。</p>
     </div>
     <div class="card">
       <div class="section-title"><span>7</span><h2>左右ズレ推移</h2></div>
       <canvas id="deviationChart" height="280"></canvas>
-      <p class="hint">中心線からの距離を時系列で表示します。後方視点のサーブ分析に向いています。</p>
+      <p class="hint">中心線からの距離を時系列で表示します。</p>
     </div>
   </section>
 
@@ -144,9 +145,7 @@
     <div class="table-wrap">
       <table id="dataTable">
         <thead>
-          <tr>
-            <th>#</th><th>時刻s</th><th>種類</th><th>x</th><th>y</th><th>中心線ズレ</th><th>サーブ分類</th><th>メモ</th><th>削除</th>
-          </tr>
+          <tr><th>#</th><th>時刻s</th><th>種類</th><th>x</th><th>y</th><th>中心線ズレ</th><th>サーブ分類</th><th>メモ</th><th>削除</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -154,9 +153,7 @@
   </section>
 </main>
 
-<footer>YT Serve Click Analyzer v5 / YouTube観察クリック分析用</footer>
-
-<script src="https://www.youtube.com/iframe_api"></script>
+<footer>YT Serve Click Analyzer v6 / YouTube観察クリック分析用</footer>
 <script src="app.js"></script>
 </body>
 </html>
