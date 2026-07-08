@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YT Serve Click Analyzer v5</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header class="app-header">
+  <div>
+    <p class="eyebrow">YouTube Click Analysis / Volleyball Serve</p>
+    <h1>YT Serve Analyzer</h1>
+    <p class="subtitle">YouTube動画の上からクリックして、サーブの軌道・打点・左右ズレ・回転推定を記録する分析アプリ</p>
+  </div>
+  <div class="header-actions">
+    <button id="saveBtn">保存</button>
+    <button id="exportBtn" class="primary">CSV出力</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="card">
+    <div class="section-title"><span>1</span><h2>YouTube動画を読み込む</h2></div>
+    <div class="grid-3">
+      <label>選手名・動画名
+        <input id="playerName" placeholder="例：〇〇選手 フローターサーブ" />
+      </label>
+      <label>YouTube URL
+        <input id="youtubeUrl" placeholder="https://www.youtube.com/watch?v=..." />
+      </label>
+      <label>動画FPS（推定）
+        <input id="fps" type="number" step="0.01" value="30" />
+      </label>
+    </div>
+    <div class="tool-row">
+      <button id="loadYoutube" class="primary">動画を表示</button>
+      <button id="toggleClick" class="accent">クリック解析：ON</button>
+      <button id="clearAll">全データ削除</button>
+    </div>
+    <p class="hint">YouTube映像そのものを自動取得するのではなく、動画の上に透明キャンバスを重ね、クリック位置と時刻を記録します。クリック解析ONの間はYouTube本体の操作を遮るため、下の再生ボタンを使います。</p>
+  </section>
+
+  <section class="card">
+    <div class="section-title"><span>2</span><h2>再生・クリック解析</h2></div>
+    <div class="video-shell">
+      <div id="ytPlayer"></div>
+      <canvas id="overlay"></canvas>
+    </div>
+
+    <div class="tool-row">
+      <button id="playPause">再生/一時停止</button>
+      <button id="backFrame">◀ 1フレーム</button>
+      <button id="forwardFrame">1フレーム ▶</button>
+      <button id="back01">◀ 0.1秒</button>
+      <button id="forward01">0.1秒 ▶</button>
+      <button id="back1">◀ 1秒</button>
+      <button id="forward1">1秒 ▶</button>
+    </div>
+
+    <div class="summary-strip">
+      <div class="summary-chip">時刻: <strong id="timeNow">0.00s</strong></div>
+      <div class="summary-chip">モード: <strong id="modeNow">ボール軌道</strong></div>
+      <div class="summary-chip">中心線: <strong id="centerStatus">未設定</strong></div>
+      <div class="summary-chip">基準線: <strong id="scaleStatus">未設定</strong></div>
+      <div class="summary-chip">平均速度: <strong id="speedStatus">-</strong></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="section-title"><span>3</span><h2>クリック記録モード</h2></div>
+    <div class="mode-grid">
+      <button data-mode="ball" class="mode-btn selected">ボール軌道</button>
+      <button data-mode="center" class="mode-btn">中心線2点</button>
+      <button data-mode="scale" class="mode-btn">基準線2点</button>
+      <button data-mode="toss" class="mode-btn">トス最高点</button>
+      <button data-mode="hit" class="mode-btn">打点</button>
+      <button data-mode="target" class="mode-btn">落下点/狙い</button>
+      <button data-mode="body" class="mode-btn">体軸/着地</button>
+      <button id="undoBtn">1つ戻す</button>
+    </div>
+    <div class="grid-4">
+      <label>基準線の実距離 m
+        <input id="scaleMeters" type="number" step="0.01" value="9" />
+      </label>
+      <label>1回転に必要なフレーム数
+        <input id="rotationFrames" type="number" step="0.1" placeholder="例：10" />
+      </label>
+      <label>観察分類
+        <select id="serveType">
+          <option>フローター</option>
+          <option>ジャンプフローター</option>
+          <option>トップスピン</option>
+          <option>その他</option>
+        </select>
+      </label>
+      <label>クリックメモ
+        <input id="pointMemo" placeholder="例：手元で左へ流れる / ほぼ無回転" />
+      </label>
+    </div>
+  </section>
+
+  <section class="grid-3">
+    <div class="card">
+      <div class="section-title"><span>4</span><h2>分析サマリー</h2></div>
+      <div id="summaryCards" class="mini-stats"></div>
+    </div>
+    <div class="card wide-2">
+      <div class="section-title"><span>5</span><h2>観察メモ</h2></div>
+      <div class="grid-2">
+        <label>フォームの特徴
+          <textarea id="formNotes" placeholder="例：トスは体の中心線より右。打点は高いが、体軸が左へ傾く。"></textarea>
+        </label>
+        <label>軌道・回転の特徴
+          <textarea id="trajectoryNotes" placeholder="例：ネット通過後に左へ流れる。回転は少なく見える。"></textarea>
+        </label>
+      </div>
+      <div class="grid-2">
+        <label>分析から言えること
+          <textarea id="resultNotes" placeholder="例：中心線からのズレが大きい場面で、軌道が左右にぶれやすい。"></textarea>
+        </label>
+        <label>次に確認したいこと
+          <textarea id="nextNotes" placeholder="例：同じ選手の別サーブで、トス位置と打点のズレを比較する。"></textarea>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid-2">
+    <div class="card">
+      <div class="section-title"><span>6</span><h2>軌道グラフ</h2></div>
+      <canvas id="trajectoryChart" height="280"></canvas>
+      <p class="hint">クリックしたボール位置を時間順に線でつなぎます。中心線を設定すると左右ズレの解釈がしやすくなります。</p>
+    </div>
+    <div class="card">
+      <div class="section-title"><span>7</span><h2>左右ズレ推移</h2></div>
+      <canvas id="deviationChart" height="280"></canvas>
+      <p class="hint">中心線からの距離を時系列で表示します。後方視点のサーブ分析に向いています。</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="section-title"><span>8</span><h2>クリックデータ</h2></div>
+    <div class="table-wrap">
+      <table id="dataTable">
+        <thead>
+          <tr>
+            <th>#</th><th>時刻s</th><th>種類</th><th>x</th><th>y</th><th>中心線ズレ</th><th>サーブ分類</th><th>メモ</th><th>削除</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer>YT Serve Click Analyzer v5 / YouTube観察クリック分析用</footer>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script src="app.js"></script>
+</body>
+</html>
