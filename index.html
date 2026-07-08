@@ -3,91 +3,106 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>YT Serve Click Analyzer v6</title>
+  <title>Serve Lab Auto v7</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 <header class="app-header">
   <div>
-    <p class="eyebrow">YouTube Click Analysis / Volleyball Serve</p>
-    <h1>YT Serve Analyzer v6</h1>
-    <p class="subtitle">YouTube動画の上からクリックして、サーブの軌道・打点・左右ズレ・回転推定を記録する分析アプリ</p>
+    <p class="eyebrow">Video File Auto Analysis / Volleyball Serve</p>
+    <h1>Serve Lab Auto</h1>
+    <p class="subtitle">動画ファイルからサーブのボール軌道・左右ズレ・速度を自動追跡する探究アプリ</p>
   </div>
   <div class="header-actions">
-    <button id="saveBtn">保存</button>
-    <button id="exportBtn" class="primary">CSV出力</button>
+    <button id="exportCsvBtn" class="primary">CSV出力</button>
+    <button id="exportJsonBtn">JSON保存</button>
+    <label class="file-button">JSON読込<input id="importJson" type="file" accept="application/json" /></label>
   </div>
 </header>
 
 <main class="layout">
   <section class="card">
-    <div class="section-title"><span>1</span><h2>YouTube動画を読み込む</h2></div>
-    <div class="grid-3">
-      <label>選手名・動画名
-        <input id="playerName" placeholder="例：〇〇選手 フローターサーブ" />
+    <div class="section-title"><span>1</span><h2>動画ファイルを読み込む</h2></div>
+    <div class="grid-4">
+      <label>分析名・選手名
+        <input id="projectName" placeholder="例：〇〇選手 後方視点フローター" />
       </label>
-      <label>YouTube URL
-        <input id="youtubeUrl" placeholder="https://www.youtube.com/watch?v=... / shorts URLも可" />
+      <label>動画ファイル mp4 / mov
+        <input id="videoInput" type="file" accept="video/*" />
       </label>
-      <label>動画FPS（推定）
+      <label>FPS
         <input id="fps" type="number" step="0.01" value="30" />
       </label>
+      <label>解析間隔
+        <select id="frameSkip">
+          <option value="1">毎フレーム</option>
+          <option value="2" selected>2フレームごと</option>
+          <option value="3">3フレームごと</option>
+          <option value="5">5フレームごと</option>
+        </select>
+      </label>
     </div>
-    <div class="tool-row">
-      <button id="loadYoutube" class="primary">動画を表示</button>
-      <button id="toggleClick">クリック解析：OFF</button>
-      <button id="clearAll">全データ削除</button>
-    </div>
-    <div id="statusBox" class="summary-chip" style="margin-top:12px;display:inline-block;">待機中</div>
-    <p class="hint">v6はまず通常のiframeとして動画を表示し、その後YouTube APIで再生時刻を取得します。動画が表示されたら、動画操作は「クリック解析OFF」、記録するときだけ「ON」にしてください。</p>
+    <p class="hint">動画ファイル版は、ブラウザがフレーム画像を読み取れるため自動追跡ができます。まず最初のボールを1回クリックして、そこから自動追跡します。</p>
   </section>
 
   <section class="card">
-    <div class="section-title"><span>2</span><h2>再生・クリック解析</h2></div>
+    <div class="section-title"><span>2</span><h2>動画・追跡画面</h2></div>
     <div class="video-shell">
-      <div id="ytHost" class="yt-host"><p class="yt-placeholder">ここにYouTube動画が表示されます</p></div>
+      <video id="video" controls playsinline></video>
       <canvas id="overlay"></canvas>
     </div>
-
     <div class="tool-row">
-      <button id="playPause">再生/一時停止</button>
+      <button id="playPause">再生/停止</button>
       <button id="backFrame">◀ 1フレーム</button>
       <button id="forwardFrame">1フレーム ▶</button>
-      <button id="back01">◀ 0.1秒</button>
-      <button id="forward01">0.1秒 ▶</button>
-      <button id="back1">◀ 1秒</button>
-      <button id="forward1">1秒 ▶</button>
+      <button id="setStartBtn">現在時刻を開始</button>
+      <button id="setEndBtn">現在時刻を終了</button>
+      <button id="goStartBtn">開始へ</button>
     </div>
-
     <div class="summary-strip">
       <div class="summary-chip">時刻: <strong id="timeNow">0.00s</strong></div>
-      <div class="summary-chip">モード: <strong id="modeNow">ボール軌道</strong></div>
-      <div class="summary-chip">中心線: <strong id="centerStatus">未設定</strong></div>
-      <div class="summary-chip">基準線: <strong id="scaleStatus">未設定</strong></div>
-      <div class="summary-chip">平均速度: <strong id="speedStatus">-</strong></div>
+      <div class="summary-chip">解析範囲: <strong id="rangeNow">0.00s - 0.00s</strong></div>
+      <div class="summary-chip">モード: <strong id="modeNow">初期ボール</strong></div>
+      <div class="summary-chip">追跡点: <strong id="trackCount">0</strong></div>
+      <div class="summary-chip">平均速度: <strong id="avgSpeed">-</strong></div>
     </div>
   </section>
 
   <section class="card">
-    <div class="section-title"><span>3</span><h2>クリック記録モード</h2></div>
+    <div class="section-title"><span>3</span><h2>準備：基準・初期ボールを設定</h2></div>
     <div class="mode-grid">
-      <button data-mode="ball" class="mode-btn selected">ボール軌道</button>
+      <button data-mode="init" class="mode-btn selected">初期ボールをクリック</button>
       <button data-mode="center" class="mode-btn">中心線2点</button>
       <button data-mode="scale" class="mode-btn">基準線2点</button>
-      <button data-mode="toss" class="mode-btn">トス最高点</button>
-      <button data-mode="hit" class="mode-btn">打点</button>
-      <button data-mode="target" class="mode-btn">落下点/狙い</button>
-      <button data-mode="body" class="mode-btn">体軸/着地</button>
-      <button id="undoBtn">1つ戻す</button>
+      <button data-mode="correct" class="mode-btn">現在時刻の点を補正</button>
+      <button data-mode="delete" class="mode-btn">近い点を削除</button>
     </div>
     <div class="grid-4">
       <label>基準線の実距離 m
         <input id="scaleMeters" type="number" step="0.01" value="9" />
       </label>
-      <label>1回転に必要なフレーム数
+      <label>探索半径 px
+        <input id="searchRadius" type="number" step="1" value="70" />
+      </label>
+      <label>色の許容範囲
+        <input id="colorTolerance" type="number" step="1" value="80" />
+      </label>
+      <label>候補の最小面積 px
+        <input id="minArea" type="number" step="1" value="8" />
+      </label>
+    </div>
+    <div class="grid-4">
+      <label>ボール検出モード
+        <select id="detectMode">
+          <option value="color" selected>初期クリックの色に近いもの</option>
+          <option value="bright">明るい小物体を優先</option>
+          <option value="hybrid">色＋明るさのハイブリッド</option>
+        </select>
+      </label>
+      <label>1回転に必要なフレーム数（任意）
         <input id="rotationFrames" type="number" step="0.1" placeholder="例：10" />
       </label>
-      <label>観察分類
+      <label>サーブ分類
         <select id="serveType">
           <option>フローター</option>
           <option>ジャンプフローター</option>
@@ -95,10 +110,17 @@
           <option>その他</option>
         </select>
       </label>
-      <label>クリックメモ
-        <input id="pointMemo" placeholder="例：手元で左へ流れる / ほぼ無回転" />
+      <label>メモ
+        <input id="memo" placeholder="例：後半で左へ流れる" />
       </label>
     </div>
+    <div class="tool-row">
+      <button id="autoTrackBtn" class="primary">自動追跡スタート</button>
+      <button id="stopTrackBtn">停止</button>
+      <button id="clearTrackBtn">追跡点クリア</button>
+      <button id="sampleColorBtn">現在位置の色を再取得</button>
+    </div>
+    <p class="hint">おすすめ手順：①動画を一時停止 → ②ボールが見える最初のフレームで「初期ボール」をクリック → ③開始・終了時刻を決める → ④自動追跡 → ⑤おかしい点だけ補正。</p>
   </section>
 
   <section class="grid-3">
@@ -107,21 +129,13 @@
       <div id="summaryCards" class="mini-stats"></div>
     </div>
     <div class="card wide-2">
-      <div class="section-title"><span>5</span><h2>観察メモ</h2></div>
+      <div class="section-title"><span>5</span><h2>考察ノート</h2></div>
       <div class="grid-2">
-        <label>フォームの特徴
-          <textarea id="formNotes" placeholder="例：トスは体の中心線より右。打点は高いが、体軸が左へ傾く。"></textarea>
+        <label>結果から言えること
+          <textarea id="resultNotes" placeholder="例：サーブ後半で中心線から左へズレが増加した。"></textarea>
         </label>
-        <label>軌道・回転の特徴
-          <textarea id="trajectoryNotes" placeholder="例：ネット通過後に左へ流れる。回転は少なく見える。"></textarea>
-        </label>
-      </div>
-      <div class="grid-2">
-        <label>分析から言えること
-          <textarea id="resultNotes" placeholder="例：中心線からのズレが大きい場面で、軌道が左右にぶれやすい。"></textarea>
-        </label>
-        <label>次に確認したいこと
-          <textarea id="nextNotes" placeholder="例：同じ選手の別サーブで、トス位置と打点のズレを比較する。"></textarea>
+        <label>誤差・限界
+          <textarea id="errorNotes" placeholder="例：ボールが小さい場面では誤検出があった。背景の白線と重なると精度が落ちた。"></textarea>
         </label>
       </div>
     </div>
@@ -131,21 +145,33 @@
     <div class="card">
       <div class="section-title"><span>6</span><h2>軌道グラフ</h2></div>
       <canvas id="trajectoryChart" height="280"></canvas>
-      <p class="hint">クリックしたボール位置を時間順に線でつなぎます。</p>
+      <p class="hint">動画座標上のボール軌道です。後方視点では左右のブレを見やすくします。</p>
     </div>
     <div class="card">
-      <div class="section-title"><span>7</span><h2>左右ズレ推移</h2></div>
+      <div class="section-title"><span>7</span><h2>中心線からの左右ズレ</h2></div>
       <canvas id="deviationChart" height="280"></canvas>
-      <p class="hint">中心線からの距離を時系列で表示します。</p>
+      <p class="hint">中心線2点を設定すると、左右ズレを px または m で表示します。</p>
+    </div>
+  </section>
+
+  <section class="grid-2">
+    <div class="card">
+      <div class="section-title"><span>8</span><h2>速度変化</h2></div>
+      <canvas id="speedChart" height="260"></canvas>
+      <p class="hint">基準線を設定すると m/s、未設定なら px/s で速度を表示します。</p>
+    </div>
+    <div class="card">
+      <div class="section-title"><span>9</span><h2>検出ログ</h2></div>
+      <div id="logBox" class="log-box">待機中</div>
     </div>
   </section>
 
   <section class="card">
-    <div class="section-title"><span>8</span><h2>クリックデータ</h2></div>
+    <div class="section-title"><span>10</span><h2>追跡データ</h2></div>
     <div class="table-wrap">
       <table id="dataTable">
         <thead>
-          <tr><th>#</th><th>時刻s</th><th>種類</th><th>x</th><th>y</th><th>中心線ズレ</th><th>サーブ分類</th><th>メモ</th><th>削除</th></tr>
+          <tr><th>#</th><th>時刻s</th><th>frame</th><th>x</th><th>y</th><th>中心線ズレ</th><th>速度</th><th>信頼度</th><th>種別</th><th>削除</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -153,7 +179,8 @@
   </section>
 </main>
 
-<footer>YT Serve Click Analyzer v6 / YouTube観察クリック分析用</footer>
+<canvas id="workCanvas" hidden></canvas>
+<footer>Serve Lab Auto v7 / Browser-based video file analysis</footer>
 <script src="app.js"></script>
 </body>
 </html>
