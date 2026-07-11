@@ -1,467 +1,761 @@
-const $ = id => document.getElementById(id);
-const video = $('video');
-const overlay = $('overlay');
-const octx = overlay.getContext('2d');
-const work = $('workCanvas');
-const wctx = work.getContext('2d', { willReadFrequently: true });
+import {
+  FilesetResolver,
+  PoseLandmarker,
+  DrawingUtils
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs";
 
-const state = {
-  mode: 'init',
-  points: [], // {t, frame, x, y, confidence, type, auto}
-  marks: [], // center/scale/init markers {type,x,y,t}
-  startTime: 0,
-  endTime: 0,
-  initPoint: null,
-  initColor: null,
-  tracking: false,
-  videoNatural: {w:0,h:0},
-  renderRect: {x:0,y:0,w:0,h:0},
-  scalePx: null,
-  centerLine: null,
-  log: []
+const MODEL_URLS = {
+  full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+  lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
+};
+const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
+const SAMPLE_FPS = 12;
+const DISPLAY_FPS = 30;
+const MAX_SAMPLES = 900;
+const MIN_VISIBILITY = 0.35;
+
+const POSE = {
+  NOSE: 0,
+  LEFT_SHOULDER: 11,
+  RIGHT_SHOULDER: 12,
+  LEFT_ELBOW: 13,
+  RIGHT_ELBOW: 14,
+  LEFT_WRIST: 15,
+  RIGHT_WRIST: 16,
+  LEFT_HIP: 23,
+  RIGHT_HIP: 24,
+  LEFT_KNEE: 25,
+  RIGHT_KNEE: 26,
+  LEFT_ANKLE: 27,
+  RIGHT_ANKLE: 28
 };
 
-function log(msg){
-  const time = new Date().toLocaleTimeString('ja-JP', {hour12:false});
-  state.log.unshift(`[${time}] ${msg}`);
-  state.log = state.log.slice(0, 80);
-  $('logBox').textContent = state.log.join('\n');
+const els = Object.fromEntries([
+  "videoFile", "dropZone", "handedness", "viewDirection", "serveType", "modelQuality",
+  "clipStart", "clipEnd", "analyzeButton", "cancelButton", "progressWrap", "progressText",
+  "progressPercent", "analysisProgress", "notice", "modelStatus", "sourceVideo", "overlayCanvas",
+  "videoStage", "playPauseButton", "prevFrameButton", "nextFrameButton", "timeline", "timeDisplay",
+  "playbackRate", "skeletonToggle", "jumpHitButton", "setHitButton", "hitTimeLabel", "youtubeUrl",
+  "loadYoutubeButton", "youtubeFrameWrap", "youtubeFrame", "youtubePlaceholder", "exportCsvButton",
+  "exportImageButton", "elbowMetric", "kneeMetric", "shoulderMetric", "trunkMetric", "detectionMetric",
+  "angleChart", "chartEmpty", "observationText", "phaseButtons"
+].map(id => [id, document.getElementById(id)]));
+
+const ctx = els.overlayCanvas.getContext("2d");
+let drawingUtils = null;
+let poseLandmarker = null;
+let loadedModelQuality = null;
+let analysis = null;
+let sourceObjectUrl = null;
+let angleChart = null;
+let renderAnimationId = null;
+let cancelRequested = false;
+let lastInferenceTimestamp = 0;
+
+function setNotice(message, type = "info") {
+  els.notice.textContent = message;
+  els.notice.className = `notice${type === "info" ? "" : ` ${type}`}`;
 }
 
-function fps(){ return parseFloat($('fps').value) || 30; }
-function frameStep(){ return 1 / fps(); }
-function frameNo(t){ return Math.round(t * fps()); }
-
-$('videoInput').addEventListener('change', e => {
-  const file = e.target.files[0];
-  if(!file) return;
-  video.src = URL.createObjectURL(file);
-  state.points = [];
-  state.marks = [];
-  state.initPoint = null;
-  state.initColor = null;
-  state.startTime = 0;
-  state.endTime = 0;
-  log(`動画を読み込みました: ${file.name}`);
-  recalcAll();
-});
-
-video.addEventListener('loadedmetadata', () => {
-  state.videoNatural.w = video.videoWidth;
-  state.videoNatural.h = video.videoHeight;
-  state.endTime = video.duration || 0;
-  $('rangeNow').textContent = `${state.startTime.toFixed(2)}s - ${state.endTime.toFixed(2)}s`;
-  resizeOverlay();
-  log(`動画情報: ${video.videoWidth}x${video.videoHeight}, ${video.duration.toFixed(2)}s`);
-});
-video.addEventListener('timeupdate', () => { updateTime(); drawOverlay(); });
-video.addEventListener('seeked', () => { updateTime(); drawOverlay(); });
-window.addEventListener('resize', resizeOverlay);
-
-function resizeOverlay(){
-  const r = overlay.getBoundingClientRect();
-  overlay.width = r.width * devicePixelRatio;
-  overlay.height = r.height * devicePixelRatio;
-  octx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
-  computeRenderRect();
-  drawOverlay();
-  drawCharts();
+function setModelStatus(text, state) {
+  els.modelStatus.textContent = text;
+  els.modelStatus.className = `status-pill status-${state}`;
 }
 
-function computeRenderRect(){
-  const cw = overlay.clientWidth, ch = overlay.clientHeight;
-  const vw = video.videoWidth || 16, vh = video.videoHeight || 9;
-  const scale = Math.min(cw / vw, ch / vh);
-  const w = vw * scale, h = vh * scale;
-  state.renderRect = {x:(cw-w)/2, y:(ch-h)/2, w, h};
+function formatTime(seconds) {
+  return Number.isFinite(seconds) ? seconds.toFixed(2) : "0.00";
 }
 
-function canvasToVideo(x,y){
-  const r = state.renderRect;
+function clamp(value, min = 0, max = 1) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function mean(values) {
+  const valid = values.filter(Number.isFinite);
+  return valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : NaN;
+}
+
+function visibilityOf(point) {
+  return Number.isFinite(point?.visibility) ? point.visibility : 1;
+}
+
+function pointsVisible(...points) {
+  return points.every(point => point && visibilityOf(point) >= MIN_VISIBILITY);
+}
+
+function angle3Points(a, b, c) {
+  if (!pointsVisible(a, b, c)) return NaN;
+  const ba = { x: a.x - b.x, y: a.y - b.y, z: (a.z || 0) - (b.z || 0) };
+  const bc = { x: c.x - b.x, y: c.y - b.y, z: (c.z || 0) - (b.z || 0) };
+  const dot = ba.x * bc.x + ba.y * bc.y + ba.z * bc.z;
+  const lenA = Math.hypot(ba.x, ba.y, ba.z);
+  const lenC = Math.hypot(bc.x, bc.y, bc.z);
+  if (!lenA || !lenC) return NaN;
+  return Math.acos(clamp(dot / (lenA * lenC), -1, 1)) * 180 / Math.PI;
+}
+
+function lineAngle(a, b) {
+  if (!pointsVisible(a, b)) return NaN;
+  return Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+}
+
+function midpoint(a, b) {
+  if (!a || !b) return null;
   return {
-    x: (x - r.x) * (video.videoWidth / r.w),
-    y: (y - r.y) * (video.videoHeight / r.h)
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+    z: ((a.z || 0) + (b.z || 0)) / 2,
+    visibility: Math.min(visibilityOf(a), visibilityOf(b))
   };
 }
-function videoToCanvas(x,y){
-  const r = state.renderRect;
+
+function normalizeHorizontalAngle(degrees) {
+  let angle = degrees;
+  while (angle > 90) angle -= 180;
+  while (angle < -90) angle += 180;
+  return angle;
+}
+
+function computeMetrics(landmarks, handedness) {
+  const right = handedness === "right";
+  const shoulder = landmarks[right ? POSE.RIGHT_SHOULDER : POSE.LEFT_SHOULDER];
+  const elbow = landmarks[right ? POSE.RIGHT_ELBOW : POSE.LEFT_ELBOW];
+  const wrist = landmarks[right ? POSE.RIGHT_WRIST : POSE.LEFT_WRIST];
+  const leftShoulder = landmarks[POSE.LEFT_SHOULDER];
+  const rightShoulder = landmarks[POSE.RIGHT_SHOULDER];
+  const leftHip = landmarks[POSE.LEFT_HIP];
+  const rightHip = landmarks[POSE.RIGHT_HIP];
+  const shoulderMid = midpoint(leftShoulder, rightShoulder);
+  const hipMid = midpoint(leftHip, rightHip);
+  const leftKnee = angle3Points(leftHip, landmarks[POSE.LEFT_KNEE], landmarks[POSE.LEFT_ANKLE]);
+  const rightKnee = angle3Points(rightHip, landmarks[POSE.RIGHT_KNEE], landmarks[POSE.RIGHT_ANKLE]);
+
+  const torsoLength = shoulderMid && hipMid ? Math.hypot(shoulderMid.x - hipMid.x, shoulderMid.y - hipMid.y) : NaN;
+  const wristAboveShoulder = pointsVisible(wrist, shoulder) && torsoLength > 0
+    ? (shoulder.y - wrist.y) / torsoLength
+    : NaN;
+
   return {
-    x: r.x + x * (r.w / video.videoWidth),
-    y: r.y + y * (r.h / video.videoHeight)
+    elbow: angle3Points(shoulder, elbow, wrist),
+    knee: mean([leftKnee, rightKnee]),
+    leftKnee,
+    rightKnee,
+    shoulderTilt: normalizeHorizontalAngle(lineAngle(leftShoulder, rightShoulder)),
+    hipTilt: normalizeHorizontalAngle(lineAngle(leftHip, rightHip)),
+    trunkLean: shoulderMid && hipMid
+      ? Math.atan2(shoulderMid.x - hipMid.x, hipMid.y - shoulderMid.y) * 180 / Math.PI
+      : NaN,
+    wristX: wrist?.x,
+    wristY: wrist?.y,
+    wristVisibility: visibilityOf(wrist),
+    wristAboveShoulder,
+    hipMidY: hipMid?.y
   };
 }
 
-$('playPause').onclick = () => video.paused ? video.play() : video.pause();
-$('backFrame').onclick = () => seekTo(Math.max(0, video.currentTime - frameStep()));
-$('forwardFrame').onclick = () => seekTo(Math.min(video.duration || Infinity, video.currentTime + frameStep()));
-$('setStartBtn').onclick = () => { state.startTime = video.currentTime; updateRange(); log(`開始時刻を設定: ${state.startTime.toFixed(2)}s`); };
-$('setEndBtn').onclick = () => { state.endTime = video.currentTime; updateRange(); log(`終了時刻を設定: ${state.endTime.toFixed(2)}s`); };
-$('goStartBtn').onclick = () => seekTo(state.startTime);
+async function initializePoseLandmarker() {
+  const quality = els.modelQuality.value;
+  if (poseLandmarker && loadedModelQuality === quality) return;
 
-function seekTo(t){ video.currentTime = t; updateTime(); }
-function updateTime(){ $('timeNow').textContent = `${video.currentTime.toFixed(2)}s`; }
-function updateRange(){ $('rangeNow').textContent = `${state.startTime.toFixed(2)}s - ${state.endTime.toFixed(2)}s`; }
-
-$('autoTrackBtn').onclick = autoTrack;
-$('stopTrackBtn').onclick = () => { state.tracking = false; log('追跡停止'); };
-$('clearTrackBtn').onclick = () => { if(confirm('追跡点を消しますか？')){ state.points=[]; recalcAll(); log('追跡点をクリアしました'); } };
-$('sampleColorBtn').onclick = () => {
-  if(!state.initPoint){ alert('先に初期ボールをクリックしてください。'); return; }
-  captureFrame(video.currentTime);
-  state.initColor = sampleColor(state.initPoint.x, state.initPoint.y, 4);
-  log(`初期色を再取得: rgb(${state.initColor.r},${state.initColor.g},${state.initColor.b})`);
-};
-
-Array.from(document.querySelectorAll('[data-mode]')).forEach(btn => {
-  btn.onclick = () => {
-    state.mode = btn.dataset.mode;
-    document.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('selected'));
-    btn.classList.add('selected');
-    $('modeNow').textContent = btn.textContent;
-  };
-});
-
-['fps','scaleMeters','rotationFrames','searchRadius','colorTolerance','minArea','detectMode'].forEach(id => $(id).addEventListener('input', recalcAll));
-
-overlay.addEventListener('click', e => {
-  if(!video.videoWidth) return;
-  const rect = overlay.getBoundingClientRect();
-  const cx = e.clientX - rect.left;
-  const cy = e.clientY - rect.top;
-  const p = canvasToVideo(cx, cy);
-  if(p.x < 0 || p.y < 0 || p.x > video.videoWidth || p.y > video.videoHeight) return;
-
-  if(state.mode === 'init'){
-    state.initPoint = {x:p.x, y:p.y, t:video.currentTime, frame:frameNo(video.currentTime)};
-    state.marks = state.marks.filter(m => m.type !== 'init');
-    state.marks.push({type:'init', x:p.x, y:p.y, t:video.currentTime});
-    captureFrame(video.currentTime);
-    state.initColor = sampleColor(p.x, p.y, 4);
-    upsertTrackPoint({t:video.currentTime, frame:frameNo(video.currentTime), x:p.x, y:p.y, confidence:1, type:'init', auto:false});
-    state.startTime = video.currentTime;
-    updateRange();
-    log(`初期ボール設定: (${p.x.toFixed(1)}, ${p.y.toFixed(1)})`);
-  } else if(state.mode === 'center'){
-    let cs = state.marks.filter(m => m.type === 'center');
-    if(cs.length >= 2) state.marks = state.marks.filter(m => m.type !== 'center');
-    state.marks.push({type:'center', x:p.x, y:p.y, t:video.currentTime});
-    log('中心線の点を記録');
-  } else if(state.mode === 'scale'){
-    let ss = state.marks.filter(m => m.type === 'scale');
-    if(ss.length >= 2) state.marks = state.marks.filter(m => m.type !== 'scale');
-    state.marks.push({type:'scale', x:p.x, y:p.y, t:video.currentTime});
-    log('基準線の点を記録');
-  } else if(state.mode === 'correct'){
-    upsertTrackPoint({t:video.currentTime, frame:frameNo(video.currentTime), x:p.x, y:p.y, confidence:1, type:'manual', auto:false});
-    log(`補正点を記録: ${video.currentTime.toFixed(3)}s`);
-  } else if(state.mode === 'delete'){
-    const idx = nearestPointIndex(p.x, p.y, video.currentTime);
-    if(idx >= 0){ state.points.splice(idx,1); log('近い追跡点を削除'); }
+  setModelStatus("AI読込中", "loading");
+  setNotice("骨格検出AIを読み込んでいます。初回のみ通信環境により時間がかかります。");
+  try {
+    if (poseLandmarker) {
+      poseLandmarker.close();
+      poseLandmarker = null;
+    }
+    const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: MODEL_URLS[quality],
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numPoses: 1,
+      minPoseDetectionConfidence: 0.45,
+      minPosePresenceConfidence: 0.45,
+      minTrackingConfidence: 0.45,
+      outputSegmentationMasks: false
+    });
+    loadedModelQuality = quality;
+    drawingUtils = new DrawingUtils(ctx);
+    setModelStatus("AI準備完了", "ready");
+  } catch (error) {
+    console.error(error);
+    setModelStatus("AI読込失敗", "error");
+    throw new Error("AIモデルを読み込めませんでした。インターネット接続とブラウザ設定を確認してください。");
   }
-  recalcAll();
-});
+}
 
-function nearestPointIndex(x,y,t){
-  let best = -1, bestScore = Infinity;
-  state.points.forEach((p,i)=>{
-    const d = Math.hypot(p.x-x, p.y-y) + Math.abs(p.t-t)*50;
-    if(d < bestScore){ bestScore=d; best=i; }
+function handleFile(file) {
+  if (!file || !file.type.startsWith("video/")) {
+    setNotice("動画ファイルを選択してください。", "error");
+    return;
+  }
+  if (sourceObjectUrl) URL.revokeObjectURL(sourceObjectUrl);
+  sourceObjectUrl = URL.createObjectURL(file);
+  els.sourceVideo.src = sourceObjectUrl;
+  els.sourceVideo.load();
+  els.dropZone.classList.add("has-file");
+  els.dropZone.querySelector("strong").textContent = file.name;
+  els.dropZone.querySelector("span").textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB`;
+  analysis = null;
+  resetResults();
+  setNotice("動画を読み込み中です…");
+}
+
+function onVideoLoaded() {
+  const video = els.sourceVideo;
+  const duration = video.duration || 0;
+  els.clipStart.value = "0";
+  els.clipEnd.value = duration.toFixed(2);
+  els.clipStart.max = duration.toFixed(2);
+  els.clipEnd.max = duration.toFixed(2);
+  els.timeline.disabled = false;
+  els.playPauseButton.disabled = false;
+  els.prevFrameButton.disabled = false;
+  els.nextFrameButton.disabled = false;
+  els.playbackRate.disabled = false;
+  els.analyzeButton.disabled = false;
+  els.videoStage.classList.remove("empty");
+  els.overlayCanvas.width = video.videoWidth || 1280;
+  els.overlayCanvas.height = video.videoHeight || 720;
+  updateTimeDisplay();
+  setNotice(`動画を読み込みました（${formatTime(duration)}秒）。解析範囲を確認して「自動解析する」を押してください。`, "success");
+  startRenderLoop();
+}
+
+function resetResults() {
+  [els.elbowMetric, els.kneeMetric, els.shoulderMetric, els.trunkMetric, els.detectionMetric]
+    .forEach(el => el.textContent = "—");
+  els.hitTimeLabel.textContent = "打点候補：未解析";
+  els.jumpHitButton.disabled = true;
+  els.setHitButton.disabled = true;
+  els.exportCsvButton.disabled = true;
+  els.exportImageButton.disabled = true;
+  els.observationText.textContent = "動画解析後、打点候補とフォームの特徴をここに表示します。";
+  els.phaseButtons.innerHTML = '<span class="muted">解析後に候補時刻が表示されます。</span>';
+  if (angleChart) {
+    angleChart.destroy();
+    angleChart = null;
+  }
+  els.chartEmpty.hidden = false;
+  clearOverlay();
+}
+
+function clearOverlay() {
+  ctx.clearRect(0, 0, els.overlayCanvas.width, els.overlayCanvas.height);
+}
+
+function startRenderLoop() {
+  if (renderAnimationId) cancelAnimationFrame(renderAnimationId);
+  const render = () => {
+    updateTimeDisplay();
+    drawCachedPoseAtTime(els.sourceVideo.currentTime);
+    renderAnimationId = requestAnimationFrame(render);
+  };
+  render();
+}
+
+function updateTimeDisplay() {
+  const video = els.sourceVideo;
+  const duration = video.duration || 0;
+  const current = video.currentTime || 0;
+  els.timeDisplay.textContent = `${formatTime(current)} / ${formatTime(duration)} 秒`;
+  if (duration && document.activeElement !== els.timeline) {
+    els.timeline.value = Math.round((current / duration) * 1000);
+  }
+  els.playPauseButton.textContent = video.paused ? "▶" : "❚❚";
+}
+
+function nearestFrameIndex(time) {
+  if (!analysis?.frames?.length) return -1;
+  let low = 0;
+  let high = analysis.frames.length - 1;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (analysis.frames[mid].time < time) low = mid + 1;
+    else high = mid;
+  }
+  if (low > 0 && Math.abs(analysis.frames[low - 1].time - time) < Math.abs(analysis.frames[low].time - time)) return low - 1;
+  return low;
+}
+
+function drawCachedPoseAtTime(time) {
+  clearOverlay();
+  if (!analysis || !els.skeletonToggle.checked) return;
+  const index = nearestFrameIndex(time);
+  if (index < 0) return;
+  const frame = analysis.frames[index];
+  if (!frame.landmarks) return;
+
+  drawingUtils.drawConnectors(frame.landmarks, PoseLandmarker.POSE_CONNECTIONS, {
+    color: "rgba(61, 214, 231, 0.92)",
+    lineWidth: Math.max(2, els.overlayCanvas.width / 520)
   });
-  return best;
+  drawingUtils.drawLandmarks(frame.landmarks, {
+    color: "#f8fafc",
+    fillColor: "#2563eb",
+    lineWidth: 1,
+    radius: Math.max(2, els.overlayCanvas.width / 260)
+  });
+
+  if (index === analysis.hitIndex) {
+    drawHitMarker(frame.landmarks, analysis.handedness);
+  }
 }
 
-function upsertTrackPoint(pt){
-  const existing = state.points.findIndex(p => Math.abs(p.t - pt.t) < frameStep()*0.6);
-  if(existing >= 0) state.points[existing] = {...state.points[existing], ...pt};
-  else state.points.push(pt);
-  state.points.sort((a,b)=>a.t-b.t);
+function drawHitMarker(landmarks, handedness) {
+  const wristIndex = handedness === "right" ? POSE.RIGHT_WRIST : POSE.LEFT_WRIST;
+  const wrist = landmarks[wristIndex];
+  if (!wrist) return;
+  const x = wrist.x * els.overlayCanvas.width;
+  const y = wrist.y * els.overlayCanvas.height;
+  const radius = Math.max(15, els.overlayCanvas.width / 45);
+  ctx.save();
+  ctx.strokeStyle = "#ef4444";
+  ctx.fillStyle = "rgba(239, 68, 68, .16)";
+  ctx.lineWidth = Math.max(3, els.overlayCanvas.width / 300);
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.font = `700 ${Math.max(16, els.overlayCanvas.width / 55)}px sans-serif`;
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeStyle = "rgba(15, 23, 42, .9)";
+  ctx.lineWidth = 5;
+  ctx.strokeText("打点候補", x + radius + 8, y - 6);
+  ctx.fillText("打点候補", x + radius + 8, y - 6);
+  ctx.restore();
 }
 
-function captureFrame(t){
-  if(!video.videoWidth) return null;
-  work.width = video.videoWidth;
-  work.height = video.videoHeight;
-  wctx.drawImage(video, 0, 0, work.width, work.height);
-  return wctx.getImageData(0,0,work.width,work.height);
+function seekVideo(time) {
+  const video = els.sourceVideo;
+  const target = clamp(time, 0, Math.max(0, (video.duration || 0) - 0.001));
+  if (Math.abs(video.currentTime - target) < 0.003) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("動画のフレーム移動がタイムアウトしました。"));
+    }, 5000);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("error", onError);
+    };
+    const onSeeked = () => { cleanup(); resolve(); };
+    const onError = () => { cleanup(); reject(new Error("動画を読み取れませんでした。")); };
+    video.addEventListener("seeked", onSeeked, { once: true });
+    video.addEventListener("error", onError, { once: true });
+    video.currentTime = target;
+  });
 }
 
-function sampleColor(x,y,radius=3){
-  const img = wctx.getImageData(Math.max(0,Math.floor(x-radius)), Math.max(0,Math.floor(y-radius)), radius*2+1, radius*2+1).data;
-  let rr=0,gg=0,bb=0,n=0;
-  for(let i=0;i<img.length;i+=4){ rr+=img[i]; gg+=img[i+1]; bb+=img[i+2]; n++; }
-  return {r:Math.round(rr/n), g:Math.round(gg/n), b:Math.round(bb/n)};
+function updateProgress(done, total, label) {
+  const percent = total ? Math.round(done / total * 100) : 0;
+  els.analysisProgress.value = percent;
+  els.progressPercent.textContent = `${percent}%`;
+  els.progressText.textContent = label;
 }
 
-async function autoTrack(){
-  if(!video.src){ alert('動画を読み込んでください。'); return; }
-  if(!state.initPoint){ alert('まず「初期ボールをクリック」でボールを1回クリックしてください。'); return; }
-  if(!state.initColor){ captureFrame(state.initPoint.t); state.initColor = sampleColor(state.initPoint.x, state.initPoint.y, 4); }
-  state.tracking = true;
+async function analyzeVideo() {
+  const video = els.sourceVideo;
+  if (!video.src || !Number.isFinite(video.duration)) return;
+
+  const start = clamp(Number(els.clipStart.value) || 0, 0, video.duration);
+  const end = clamp(Number(els.clipEnd.value) || video.duration, start + 0.05, video.duration);
+  const duration = end - start;
+  let sampleCount = Math.floor(duration * SAMPLE_FPS) + 1;
+  if (sampleCount > MAX_SAMPLES) sampleCount = MAX_SAMPLES;
+  const actualFps = sampleCount > 1 ? (sampleCount - 1) / duration : SAMPLE_FPS;
+
+  cancelRequested = false;
+  els.analyzeButton.disabled = true;
+  els.cancelButton.hidden = false;
+  els.progressWrap.hidden = false;
+  updateProgress(0, sampleCount, "AIを準備中…");
   video.pause();
-  const skip = parseInt($('frameSkip').value,10) || 1;
-  const dt = frameStep() * skip;
-  const end = Math.max(state.endTime || video.duration || 0, state.startTime);
-  let t = state.startTime;
-  let prev = nearestTrackBefore(t) || state.initPoint;
-  log(`自動追跡開始: ${state.startTime.toFixed(2)}s - ${end.toFixed(2)}s / ${skip}フレームごと`);
 
-  let count = 0, fail = 0;
-  while(state.tracking && t <= end + 1e-6){
-    await seekAndWait(t);
-    captureFrame(t);
-    const found = detectBall(prev);
-    if(found){
-      const pt = {t, frame:frameNo(t), x:found.x, y:found.y, confidence:found.confidence, type:'auto', auto:true};
-      upsertTrackPoint(pt);
-      prev = pt;
-      count++;
-    }else{
-      fail++;
-      prev = {...prev, x:prev.x, y:prev.y};
-      log(`検出失敗: ${t.toFixed(3)}s`);
+  try {
+    await initializePoseLandmarker();
+    const frames = [];
+    const handedness = els.handedness.value;
+    const timestampBase = Math.max(performance.now(), lastInferenceTimestamp + 10);
+
+    for (let i = 0; i < sampleCount; i++) {
+      if (cancelRequested) throw new DOMException("解析を中止しました。", "AbortError");
+      const time = sampleCount === 1 ? start : start + (i / (sampleCount - 1)) * duration;
+      await seekVideo(time);
+      const timestamp = timestampBase + i * (1000 / actualFps);
+      lastInferenceTimestamp = timestamp;
+      const result = poseLandmarker.detectForVideo(video, timestamp);
+      const landmarks = result.landmarks?.[0]
+        ? result.landmarks[0].map(point => ({ ...point }))
+        : null;
+      frames.push({
+        time,
+        landmarks,
+        metrics: landmarks ? computeMetrics(landmarks, handedness) : null
+      });
+      updateProgress(i + 1, sampleCount, `骨格を解析中… ${i + 1} / ${sampleCount}`);
+      if (i % 5 === 0) await new Promise(resolve => setTimeout(resolve, 0));
     }
-    if(count % 5 === 0){ recalcAll(false); await sleep(0); }
-    t += dt;
+
+    const hitIndex = estimateHitIndex(frames, handedness);
+    const phases = estimatePhases(frames, hitIndex);
+    analysis = {
+      frames,
+      hitIndex,
+      phases,
+      handedness,
+      viewDirection: els.viewDirection.value,
+      serveType: els.serveType.value,
+      clipStart: start,
+      clipEnd: end,
+      sampleFps: actualFps
+    };
+
+    renderResults();
+    if (hitIndex >= 0) await seekVideo(frames[hitIndex].time);
+    setNotice("解析が完了しました。赤い円の打点候補をスロー再生で確認し、必要なら現在位置へ修正してください。", "success");
+  } catch (error) {
+    console.error(error);
+    if (error.name === "AbortError") {
+      setNotice("解析を中止しました。", "error");
+    } else {
+      setNotice(error.message || "解析中にエラーが発生しました。", "error");
+    }
+  } finally {
+    els.analyzeButton.disabled = false;
+    els.cancelButton.hidden = true;
+    updateProgress(1, 1, "完了");
+    setTimeout(() => { els.progressWrap.hidden = true; }, 700);
   }
-  state.tracking = false;
-  recalcAll();
-  log(`自動追跡終了: 成功 ${count} 点 / 失敗 ${fail} 回`);
 }
 
-function nearestTrackBefore(t){
-  const pts = state.points.filter(p => p.t <= t).sort((a,b)=>b.t-a.t);
-  return pts[0] || null;
-}
-function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
-function seekAndWait(t){
-  return new Promise(resolve => {
-    const done = () => { video.removeEventListener('seeked', done); setTimeout(resolve, 20); };
-    video.addEventListener('seeked', done, {once:true});
-    video.currentTime = Math.min(Math.max(t,0), video.duration || t);
-  });
-}
+function estimateHitIndex(frames, handedness) {
+  const validIndices = frames.map((frame, i) => frame.metrics && Number.isFinite(frame.metrics.elbow) ? i : -1).filter(i => i >= 0);
+  if (!validIndices.length) return -1;
 
-function detectBall(prev){
-  const img = wctx.getImageData(0,0,work.width,work.height);
-  const data = img.data;
-  const radius = parseInt($('searchRadius').value,10) || 70;
-  const tol = parseInt($('colorTolerance').value,10) || 80;
-  const minArea = parseInt($('minArea').value,10) || 8;
-  const mode = $('detectMode').value;
-  const base = state.initColor || {r:240,g:240,b:240};
-  const x0 = Math.max(0, Math.floor(prev.x - radius));
-  const x1 = Math.min(work.width-1, Math.floor(prev.x + radius));
-  const y0 = Math.max(0, Math.floor(prev.y - radius));
-  const y1 = Math.min(work.height-1, Math.floor(prev.y + radius));
-
-  const candidates = [];
-  const step = 2;
-  for(let y=y0; y<=y1; y+=step){
-    for(let x=x0; x<=x1; x+=step){
-      const dx = x - prev.x, dy = y - prev.y;
-      if(dx*dx + dy*dy > radius*radius) continue;
-      const idx = (y*work.width + x)*4;
-      const r=data[idx], g=data[idx+1], b=data[idx+2];
-      const brightness = (r+g+b)/3;
-      const colorDist = Math.sqrt((r-base.r)**2 + (g-base.g)**2 + (b-base.b)**2);
-      const whiteness = Math.max(r,g,b) - Math.min(r,g,b);
-      let ok = false;
-      let score = 0;
-      if(mode === 'color'){
-        ok = colorDist < tol;
-        score = colorDist + Math.hypot(dx,dy)*0.35;
-      }else if(mode === 'bright'){
-        ok = brightness > 165 && whiteness < 95;
-        score = (255-brightness) + whiteness*0.5 + Math.hypot(dx,dy)*0.35;
-      }else{
-        ok = (colorDist < tol*1.15) || (brightness > 170 && whiteness < 105);
-        score = Math.min(colorDist, 255-brightness + whiteness) + Math.hypot(dx,dy)*0.35;
-      }
-      if(ok) candidates.push({x,y,score,brightness,colorDist});
+  const speeds = frames.map(() => 0);
+  for (let i = 1; i < frames.length; i++) {
+    const prev = frames[i - 1].metrics;
+    const current = frames[i].metrics;
+    const dt = frames[i].time - frames[i - 1].time;
+    if (prev && current && dt > 0 && Number.isFinite(prev.wristX) && Number.isFinite(current.wristX)) {
+      speeds[i] = Math.hypot(current.wristX - prev.wristX, current.wristY - prev.wristY) / dt;
     }
   }
-  if(candidates.length < minArea) return null;
+  const maxSpeed = Math.max(...speeds, 0.001);
+  let bestIndex = validIndices[0];
+  let bestScore = -Infinity;
+  const minSearch = Math.floor(frames.length * 0.12);
+  const maxSearch = Math.ceil(frames.length * 0.96);
 
-  // clustering: choose dense group near the best-scoring candidate
-  candidates.sort((a,b)=>a.score-b.score);
-  let bestCluster = null;
-  const clusterRadius = 14;
-  const seeds = candidates.slice(0, Math.min(40,candidates.length));
-  for(const seed of seeds){
-    let sx=0, sy=0, weight=0, n=0, totalScore=0;
-    for(const c of candidates){
-      const d = Math.hypot(c.x-seed.x, c.y-seed.y);
-      if(d <= clusterRadius){
-        const wt = 1 / (1 + c.score);
-        sx += c.x * wt; sy += c.y * wt; weight += wt; n++; totalScore += c.score;
-      }
-    }
-    if(n >= minArea){
-      const cx = sx / weight, cy = sy / weight;
-      const distancePenalty = Math.hypot(cx-prev.x, cy-prev.y) * 0.15;
-      const score = totalScore/n - n*0.6 + distancePenalty;
-      if(!bestCluster || score < bestCluster.score){ bestCluster = {x:cx,y:cy,n,score}; }
+  for (const i of validIndices) {
+    if (i < minSearch || i > maxSearch) continue;
+    const m = frames[i].metrics;
+    if (m.wristVisibility < MIN_VISIBILITY) continue;
+    const heightScore = clamp((m.wristAboveShoulder + 0.1) / 1.45);
+    const extensionScore = clamp((m.elbow - 100) / 80);
+    const speedScore = clamp(speeds[i] / maxSpeed);
+    const score = heightScore * 0.5 + extensionScore * 0.32 + speedScore * 0.18;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = i;
     }
   }
-  if(!bestCluster) return null;
-  const confidence = Math.max(0.05, Math.min(1, bestCluster.n / 60));
-  return {x:bestCluster.x, y:bestCluster.y, confidence};
+  return bestIndex;
 }
 
-function recalcAll(redraw=true){
-  recalcScaleCenter();
-  renderSummary();
-  renderTable();
-  if(redraw){ drawOverlay(); drawCharts(); }
-}
-
-function recalcScaleCenter(){
-  const ss = state.marks.filter(m=>m.type==='scale');
-  state.scalePx = ss.length === 2 ? dist(ss[0],ss[1]) : null;
-  const cs = state.marks.filter(m=>m.type==='center');
-  state.centerLine = cs.length === 2 ? [cs[0],cs[1]] : null;
-}
-function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
-function mPerPx(){ return state.scalePx ? (parseFloat($('scaleMeters').value)||0)/state.scalePx : null; }
-function deviationFromCenter(p){
-  if(!state.centerLine) return null;
-  const [a,b] = state.centerLine;
-  const dx=b.x-a.x, dy=b.y-a.y;
-  const len=Math.hypot(dx,dy);
-  if(!len) return null;
-  const signed=((p.x-a.x)*dy - (p.y-a.y)*dx)/len;
-  const scale=mPerPx();
-  return {px:signed, m:scale?signed*scale:null};
-}
-function speeds(){
-  const scale=mPerPx();
-  const pts=state.points.slice().sort((a,b)=>a.t-b.t);
-  const arr=[];
-  for(let i=1;i<pts.length;i++){
-    const dt=pts[i].t-pts[i-1].t;
-    if(dt<=0) continue;
-    const dpx=dist(pts[i],pts[i-1]);
-    arr.push({t:pts[i].t, value:scale?dpx*scale/dt:dpx/dt, unit:scale?'m/s':'px/s'});
+function estimatePhases(frames, hitIndex) {
+  if (hitIndex < 0) return [];
+  const hitTime = frames[hitIndex].time;
+  const beforeStart = Math.max(0, hitIndex - Math.round(1.8 * (analysis?.sampleFps || SAMPLE_FPS)));
+  let takebackIndex = beforeStart;
+  let minElbow = Infinity;
+  for (let i = beforeStart; i < hitIndex; i++) {
+    const elbow = frames[i].metrics?.elbow;
+    if (Number.isFinite(elbow) && elbow < minElbow) {
+      minElbow = elbow;
+      takebackIndex = i;
+    }
   }
-  return arr;
-}
-function estimatedRPM(){
-  const frames=parseFloat($('rotationFrames').value);
-  return frames>0 ? fps()/frames*60 : null;
-}
 
-function renderSummary(){
-  const pts=state.points;
-  const sp=speeds();
-  const scale=mPerPx();
-  const avgSpeed=sp.length ? sp.reduce((a,b)=>a+b.value,0)/sp.length : null;
-  const devs=pts.map(deviationFromCenter).filter(Boolean);
-  const vals=devs.map(d=>Math.abs(scale?d.m:d.px));
-  const avgDev=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:null;
-  const maxDev=vals.length?Math.max(...vals):null;
-  const rpm=estimatedRPM();
-  $('trackCount').textContent=pts.length;
-  $('avgSpeed').textContent=avgSpeed==null?'-':`${avgSpeed.toFixed(2)} ${scale?'m/s':'px/s'}`;
-  $('summaryCards').innerHTML=`
-    <div class="stat-box">追跡点<strong>${pts.length}</strong></div>
-    <div class="stat-box">平均速度<strong>${avgSpeed==null?'-':`${avgSpeed.toFixed(2)} ${scale?'m/s':'px/s'}`}</strong></div>
-    <div class="stat-box">最大速度<strong>${sp.length?`${Math.max(...sp.map(s=>s.value)).toFixed(2)} ${scale?'m/s':'px/s'}`:'-'}</strong></div>
-    <div class="stat-box">平均左右ズレ<strong>${avgDev==null?'-':`${avgDev.toFixed(2)} ${scale?'m':'px'}`}</strong></div>
-    <div class="stat-box">最大左右ズレ<strong>${maxDev==null?'-':`${maxDev.toFixed(2)} ${scale?'m':'px'}`}</strong></div>
-    <div class="stat-box">推定回転数<strong>${rpm?`${rpm.toFixed(1)} rpm`:'-'}</strong></div>
-    <div class="stat-box">基準線<strong>${state.scalePx?`${$('scaleMeters').value}m / ${state.scalePx.toFixed(1)}px`:'未設定'}</strong></div>
-    <div class="stat-box">中心線<strong>${state.centerLine?'設定済み':'未設定'}</strong></div>
-  `;
-}
-
-function drawOverlay(){
-  const w=overlay.clientWidth, h=overlay.clientHeight;
-  octx.clearRect(0,0,w,h);
-  const r=state.renderRect;
-  octx.strokeStyle='rgba(255,255,255,.35)'; octx.lineWidth=1; octx.strokeRect(r.x,r.y,r.w,r.h);
-
-  const center=state.marks.filter(m=>m.type==='center'); if(center.length===2) drawMarkLine(center[0],center[1],'#22c55e',3);
-  const scale=state.marks.filter(m=>m.type==='scale'); if(scale.length===2) drawMarkLine(scale[0],scale[1],'#a855f7',3);
-  const init=state.marks.find(m=>m.type==='init'); if(init) drawMark(init,'#0ea5e9',9,'初');
-
-  const pts=state.points.slice().sort((a,b)=>a.t-b.t);
-  if(pts.length>1){
-    octx.beginPath();
-    pts.forEach((p,i)=>{ const c=videoToCanvas(p.x,p.y); i?octx.lineTo(c.x,c.y):octx.moveTo(c.x,c.y); });
-    octx.strokeStyle='#f97316'; octx.lineWidth=3; octx.stroke();
+  let landingIndex = Math.min(frames.length - 1, hitIndex + Math.round(0.65 * SAMPLE_FPS));
+  let maxHipY = -Infinity;
+  for (let i = hitIndex; i < Math.min(frames.length, hitIndex + Math.round(1.3 * SAMPLE_FPS)); i++) {
+    const hipY = frames[i].metrics?.hipMidY;
+    if (Number.isFinite(hipY) && hipY > maxHipY) {
+      maxHipY = hipY;
+      landingIndex = i;
+    }
   }
-  pts.forEach((p,i)=>{
-    const c=videoToCanvas(p.x,p.y);
-    octx.beginPath(); octx.arc(c.x,c.y,p.auto?4:7,0,Math.PI*2);
-    octx.fillStyle=p.auto?'#f97316':'#2563eb'; octx.fill();
-    if(i%3===0 || !p.auto){ octx.fillStyle='white'; octx.font='12px sans-serif'; octx.fillText(String(i+1), c.x+7, c.y-7); }
-  });
-}
-function drawMarkLine(a,b,color,width){ const ca=videoToCanvas(a.x,a.y), cb=videoToCanvas(b.x,b.y); octx.beginPath(); octx.moveTo(ca.x,ca.y); octx.lineTo(cb.x,cb.y); octx.strokeStyle=color; octx.lineWidth=width; octx.stroke(); }
-function drawMark(p,color,r,label){ const c=videoToCanvas(p.x,p.y); octx.beginPath(); octx.arc(c.x,c.y,r,0,Math.PI*2); octx.fillStyle=color; octx.fill(); octx.fillStyle='white'; octx.font='12px sans-serif'; octx.fillText(label,c.x-5,c.y+4); }
 
-function renderTable(){
-  const sp=speeds();
-  const tbody=$('dataTable').querySelector('tbody');
-  tbody.innerHTML=state.points.map((p,i)=>{
-    const d=deviationFromCenter(p); const scale=mPerPx();
-    const dev=d?(scale?`${d.m.toFixed(3)} m`:`${d.px.toFixed(1)} px`):'';
-    const speed=i>0&&sp[i-1]?`${sp[i-1].value.toFixed(2)} ${sp[i-1].unit}`:'';
-    return `<tr><td>${i+1}</td><td>${p.t.toFixed(3)}</td><td>${p.frame}</td><td>${p.x.toFixed(1)}</td><td>${p.y.toFixed(1)}</td><td>${dev}</td><td>${speed}</td><td>${(p.confidence??0).toFixed(2)}</td><td>${p.auto?'自動':'手動'}</td><td><button data-del="${i}">削除</button></td></tr>`;
-  }).join('');
-  tbody.querySelectorAll('[data-del]').forEach(btn=>btn.onclick=()=>{ state.points.splice(Number(btn.dataset.del),1); recalcAll(); });
+  return [
+    { label: "構え", index: 0 },
+    { label: "テイクバック候補", index: takebackIndex },
+    { label: "打点候補", index: hitIndex },
+    { label: "フォロースルー", index: Math.min(frames.length - 1, hitIndex + Math.round(0.3 * SAMPLE_FPS)) },
+    { label: "着地候補", index: landingIndex }
+  ].filter((phase, pos, arr) => arr.findIndex(other => other.index === phase.index) === pos && Number.isFinite(hitTime));
 }
 
-function setupChart(canvas){
-  const g=canvas.getContext('2d'); const w=canvas.clientWidth,h=canvas.clientHeight;
-  canvas.width=w*devicePixelRatio; canvas.height=h*devicePixelRatio; g.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0); g.clearRect(0,0,w,h); return [g,w,h];
-}
-function axes(g,w,h,xlab,ylab){
-  g.strokeStyle='#cbd5e1';g.lineWidth=1;g.beginPath();g.moveTo(45,12);g.lineTo(45,h-36);g.lineTo(w-20,h-36);g.stroke();
-  g.fillStyle='#334155';g.font='12px sans-serif';g.fillText(xlab,w/2,h-12);g.save();g.translate(14,h/2+30);g.rotate(-Math.PI/2);g.fillText(ylab,0,0);g.restore();
-}
-function empty(g,text){g.fillStyle='#64748b';g.fillText(text,60,60)}
-function drawCharts(){ drawTrajectoryChart(); drawDeviationChart(); drawSpeedChart(); }
-function drawTrajectoryChart(){
-  const [g,w,h]=setupChart($('trajectoryChart')); axes(g,w,h,'x','y'); const pts=state.points;
-  if(pts.length<2){empty(g,'自動追跡すると軌道が表示されます');return;}
-  const minX=Math.min(...pts.map(p=>p.x)),maxX=Math.max(...pts.map(p=>p.x)),minY=Math.min(...pts.map(p=>p.y)),maxY=Math.max(...pts.map(p=>p.y));
-  const sx=x=>45+(w-70)*(x-minX)/((maxX-minX)||1); const sy=y=>15+(h-55)*(y-minY)/((maxY-minY)||1);
-  g.beginPath(); pts.forEach((p,i)=>i?g.lineTo(sx(p.x),sy(p.y)):g.moveTo(sx(p.x),sy(p.y))); g.strokeStyle='#f97316'; g.lineWidth=3; g.stroke();
-  pts.forEach(p=>{g.beginPath();g.arc(sx(p.x),sy(p.y),4,0,Math.PI*2);g.fillStyle=p.auto?'#f97316':'#2563eb';g.fill();});
-}
-function drawDeviationChart(){
-  const [g,w,h]=setupChart($('deviationChart')); axes(g,w,h,'時刻','左右ズレ'); const scale=mPerPx(); const data=state.points.map(p=>({t:p.t,d:deviationFromCenter(p)})).filter(x=>x.d);
-  if(data.length<2){empty(g,'中心線2点を設定すると表示されます');return;}
-  const vals=data.map(x=>scale?x.d.m:x.d.px); const times=data.map(x=>x.t); const minT=Math.min(...times),maxT=Math.max(...times),maxAbs=Math.max(1,...vals.map(v=>Math.abs(v)))*1.1;
-  const sx=t=>45+(w-70)*(t-minT)/((maxT-minT)||1); const sy=v=>(h-36)/2-(h-70)*v/(2*maxAbs)+10;
-  g.strokeStyle='#e2e8f0';g.beginPath();g.moveTo(45,sy(0));g.lineTo(w-20,sy(0));g.stroke();
-  g.beginPath();vals.forEach((v,i)=>i?g.lineTo(sx(times[i]),sy(v)):g.moveTo(sx(times[i]),sy(v)));g.strokeStyle='#2563eb';g.lineWidth=3;g.stroke();
-}
-function drawSpeedChart(){
-  const [g,w,h]=setupChart($('speedChart')); axes(g,w,h,'時刻','速度'); const sp=speeds();
-  if(sp.length<2){empty(g,'追跡点が増えると表示されます');return;}
-  const times=sp.map(s=>s.t), vals=sp.map(s=>s.value); const minT=Math.min(...times),maxT=Math.max(...times),maxV=Math.max(...vals)*1.1||1;
-  const sx=t=>45+(w-70)*(t-minT)/((maxT-minT)||1); const sy=v=>(h-36)-(h-58)*v/maxV;
-  g.beginPath();vals.forEach((v,i)=>i?g.lineTo(sx(times[i]),sy(v)):g.moveTo(sx(times[i]),sy(v)));g.strokeStyle='#22c55e';g.lineWidth=3;g.stroke();
+function renderResults() {
+  const detected = analysis.frames.filter(frame => frame.landmarks).length;
+  const rate = analysis.frames.length ? detected / analysis.frames.length * 100 : 0;
+  els.detectionMetric.textContent = `${rate.toFixed(0)}%`;
+  els.jumpHitButton.disabled = analysis.hitIndex < 0;
+  els.setHitButton.disabled = false;
+  els.exportCsvButton.disabled = false;
+  els.exportImageButton.disabled = false;
+
+  if (analysis.hitIndex < 0) {
+    els.hitTimeLabel.textContent = "打点候補：検出できませんでした";
+    els.observationText.textContent = "骨格を十分に検出できませんでした。全身が映る動画、明るい背景、短い解析範囲で再度お試しください。";
+    return;
+  }
+
+  const hitFrame = analysis.frames[analysis.hitIndex];
+  const m = hitFrame.metrics || {};
+  els.hitTimeLabel.textContent = `打点候補：${formatTime(hitFrame.time)} 秒`;
+  els.elbowMetric.textContent = metricText(m.elbow);
+  els.kneeMetric.textContent = metricText(m.knee);
+  els.shoulderMetric.textContent = signedMetricText(m.shoulderTilt);
+  els.trunkMetric.textContent = signedMetricText(m.trunkLean);
+  renderChart();
+  renderObservation(m, rate);
+  renderPhases();
 }
 
-$('exportCsvBtn').onclick=()=>{
-  const sp=speeds();
-  const rows=[
-    ['分析名', $('projectName').value], ['サーブ分類', $('serveType').value], ['メモ', $('memo').value], ['FPS', $('fps').value], ['基準線m', $('scaleMeters').value], ['推定rpm', estimatedRPM()?estimatedRPM().toFixed(1):''], ['結果', $('resultNotes').value], ['誤差', $('errorNotes').value], [],
-    ['#','時刻s','frame','x','y','中心線ズレpx','中心線ズレm','速度','速度単位','信頼度','種別']
+function metricText(value) {
+  return Number.isFinite(value) ? `${value.toFixed(1)}°` : "—";
+}
+function signedMetricText(value) {
+  return Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${value.toFixed(1)}°` : "—";
+}
+
+function renderObservation(metrics, detectionRate) {
+  const points = [];
+  if (Number.isFinite(metrics.elbow)) {
+    if (metrics.elbow >= 160) points.push(`打点候補では利き腕の肘が ${metrics.elbow.toFixed(1)}° まで伸びています。`);
+    else if (metrics.elbow >= 145) points.push(`打点候補の肘角度は ${metrics.elbow.toFixed(1)}° で、やや曲がりを残した状態です。`);
+    else points.push(`打点候補の肘角度は ${metrics.elbow.toFixed(1)}° です。打点フレームが合っているか確認してください。`);
+  }
+  if (Number.isFinite(metrics.trunkLean)) {
+    const absLean = Math.abs(metrics.trunkLean);
+    if (absLean <= 8) points.push(`体幹の左右傾きは ${absLean.toFixed(1)}° で、後方画面上では比較的小さい値です。`);
+    else if (absLean <= 15) points.push(`体幹が左右に ${absLean.toFixed(1)}° 傾いています。複数回で同じ方向へ傾くか比較すると探究に使えます。`);
+    else points.push(`体幹の左右傾きが ${absLean.toFixed(1)}° と大きめです。トス位置や助走方向との関係を確認してください。`);
+  }
+  if (Number.isFinite(metrics.shoulderTilt)) {
+    points.push(`肩のラインは水平に対して ${Math.abs(metrics.shoulderTilt).toFixed(1)}° 傾いています。`);
+  }
+  if (detectionRate < 70) points.push(`骨格検出率は ${detectionRate.toFixed(0)}% です。画角や明るさを改善すると数値の信頼性が上がります。`);
+  points.push("この結果はフォームの良し悪しを断定する採点ではなく、動画間の変化を比較するための観察データです。");
+  els.observationText.innerHTML = `<ul>${points.map(point => `<li>${point}</li>`).join("")}</ul>`;
+}
+
+function renderChart() {
+  if (angleChart) angleChart.destroy();
+  els.chartEmpty.hidden = true;
+  const hitTime = analysis.frames[analysis.hitIndex]?.time;
+  const labels = analysis.frames.map(frame => frame.time.toFixed(2));
+  const datasets = [
+    { label: "利き腕の肘", data: analysis.frames.map(f => finiteOrNull(f.metrics?.elbow)), borderWidth: 2, pointRadius: 0, tension: 0.25 },
+    { label: "膝（左右平均）", data: analysis.frames.map(f => finiteOrNull(f.metrics?.knee)), borderWidth: 2, pointRadius: 0, tension: 0.25 },
+    { label: "肩の傾き", data: analysis.frames.map(f => finiteOrNull(f.metrics?.shoulderTilt)), borderWidth: 2, pointRadius: 0, tension: 0.25 },
+    { label: "体幹の左右傾き", data: analysis.frames.map(f => finiteOrNull(f.metrics?.trunkLean)), borderWidth: 2, pointRadius: 0, tension: 0.25 }
   ];
-  state.points.forEach((p,i)=>{ const d=deviationFromCenter(p); const s=i>0?sp[i-1]:null; rows.push([i+1,p.t.toFixed(3),p.frame,p.x.toFixed(2),p.y.toFixed(2),d?d.px.toFixed(2):'',d&&d.m!=null?d.m.toFixed(4):'',s?s.value.toFixed(3):'',s?s.unit:'',p.confidence??'',p.auto?'auto':'manual']); });
-  downloadText('serve_lab_auto_data.csv', '\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n'), 'text/csv;charset=utf-8');
-};
-$('exportJsonBtn').onclick=()=>{ downloadText('serve_lab_auto_project.json', JSON.stringify(exportState(),null,2), 'application/json'); };
-$('importJson').addEventListener('change', e=>{ const f=e.target.files[0]; if(!f)return; const reader=new FileReader(); reader.onload=()=>{ try{ importState(JSON.parse(reader.result)); recalcAll(); log('JSONを読み込みました'); }catch(err){ alert('JSONを読み込めませんでした'); } }; reader.readAsText(f); });
-function exportState(){ return {fields:{projectName:$('projectName').value,fps:$('fps').value,scaleMeters:$('scaleMeters').value,frameSkip:$('frameSkip').value,searchRadius:$('searchRadius').value,colorTolerance:$('colorTolerance').value,minArea:$('minArea').value,detectMode:$('detectMode').value,rotationFrames:$('rotationFrames').value,serveType:$('serveType').value,memo:$('memo').value,resultNotes:$('resultNotes').value,errorNotes:$('errorNotes').value}, state:{points:state.points,marks:state.marks,startTime:state.startTime,endTime:state.endTime,initPoint:state.initPoint,initColor:state.initColor} }; }
-function importState(data){ Object.entries(data.fields||{}).forEach(([k,v])=>{ if($(k)) $(k).value=v; }); Object.assign(state, data.state||{}); updateRange(); }
-function downloadText(filename, text, type){ const blob=new Blob([text],{type}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); }
 
-setInterval(updateTime,200);
-resizeOverlay();
-recalcAll();
-log('待機中：動画ファイルを読み込んでください');
+  const hitLinePlugin = {
+    id: "hitLine",
+    afterDatasetsDraw(chart) {
+      if (!Number.isFinite(hitTime)) return;
+      const xScale = chart.scales.x;
+      const index = analysis.hitIndex;
+      const x = xScale.getPixelForValue(index);
+      const { top, bottom } = chart.chartArea;
+      const c = chart.ctx;
+      c.save();
+      c.strokeStyle = "rgba(220, 38, 38, .85)";
+      c.lineWidth = 2;
+      c.setLineDash([6, 5]);
+      c.beginPath();
+      c.moveTo(x, top);
+      c.lineTo(x, bottom);
+      c.stroke();
+      c.restore();
+    }
+  };
+
+  angleChart = new Chart(els.angleChart, {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { title: { display: true, text: "時刻（秒）" }, ticks: { maxTicksLimit: 9 } },
+        y: { title: { display: true, text: "角度（°）" }, suggestedMin: -20, suggestedMax: 180 }
+      },
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 14, usePointStyle: true } },
+        tooltip: { callbacks: { title: items => `${items[0].label} 秒` } }
+      }
+    },
+    plugins: [hitLinePlugin]
+  });
+}
+
+function finiteOrNull(value) {
+  return Number.isFinite(value) ? Number(value.toFixed(2)) : null;
+}
+
+function renderPhases() {
+  els.phaseButtons.innerHTML = "";
+  for (const phase of analysis.phases) {
+    const frame = analysis.frames[phase.index];
+    const button = document.createElement("button");
+    button.className = "phase-button";
+    button.textContent = `${phase.label} ${formatTime(frame.time)}秒`;
+    button.addEventListener("click", () => seekVideo(frame.time));
+    els.phaseButtons.appendChild(button);
+  }
+}
+
+function setManualHit() {
+  if (!analysis) return;
+  const index = nearestFrameIndex(els.sourceVideo.currentTime);
+  if (index < 0) return;
+  analysis.hitIndex = index;
+  analysis.phases = estimatePhases(analysis.frames, index);
+  renderResults();
+  drawCachedPoseAtTime(els.sourceVideo.currentTime);
+  setNotice(`打点を ${formatTime(analysis.frames[index].time)} 秒に修正しました。`, "success");
+}
+
+function exportCsv() {
+  if (!analysis) return;
+  const headers = [
+    "時刻_秒", "肘角度_度", "膝角度平均_度", "左膝角度_度", "右膝角度_度",
+    "肩傾き_度", "骨盤傾き_度", "体幹左右傾き_度", "手首X", "手首Y", "骨格検出",
+    "打点候補"
+  ];
+  const rows = analysis.frames.map((frame, index) => {
+    const m = frame.metrics || {};
+    return [
+      frame.time.toFixed(3), csvNumber(m.elbow), csvNumber(m.knee), csvNumber(m.leftKnee), csvNumber(m.rightKnee),
+      csvNumber(m.shoulderTilt), csvNumber(m.hipTilt), csvNumber(m.trunkLean), csvNumber(m.wristX, 5),
+      csvNumber(m.wristY, 5), frame.landmarks ? 1 : 0, index === analysis.hitIndex ? 1 : 0
+    ];
+  });
+  const csv = "\ufeff" + [headers, ...rows].map(row => row.join(",")).join("\r\n");
+  downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), `volley-motion-${Date.now()}.csv`);
+}
+
+function csvNumber(value, digits = 2) {
+  return Number.isFinite(value) ? value.toFixed(digits) : "";
+}
+
+function exportCurrentImage() {
+  const video = els.sourceVideo;
+  if (!video.videoWidth) return;
+  const output = document.createElement("canvas");
+  output.width = video.videoWidth;
+  output.height = video.videoHeight;
+  const outputCtx = output.getContext("2d");
+  outputCtx.drawImage(video, 0, 0, output.width, output.height);
+  drawCachedPoseAtTime(video.currentTime);
+  outputCtx.drawImage(els.overlayCanvas, 0, 0, output.width, output.height);
+  output.toBlob(blob => blob && downloadBlob(blob, `volley-motion-frame-${formatTime(video.currentTime)}s.png`), "image/png");
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function parseYouTubeId(urlText) {
+  try {
+    const url = new URL(urlText.trim());
+    if (url.hostname === "youtu.be") return url.pathname.split("/").filter(Boolean)[0] || null;
+    if (url.hostname.includes("youtube.com")) {
+      if (url.pathname === "/watch") return url.searchParams.get("v");
+      const parts = url.pathname.split("/").filter(Boolean);
+      const markerIndex = parts.findIndex(part => ["shorts", "embed", "live"].includes(part));
+      if (markerIndex >= 0) return parts[markerIndex + 1] || null;
+    }
+  } catch (_) {
+    return /^[A-Za-z0-9_-]{11}$/.test(urlText.trim()) ? urlText.trim() : null;
+  }
+  return null;
+}
+
+function loadYouTube() {
+  const id = parseYouTubeId(els.youtubeUrl.value);
+  if (!id) {
+    setNotice("YouTube URLを確認してください。通常動画・Shorts・youtu.be形式に対応しています。", "error");
+    return;
+  }
+  const origin = location.protocol.startsWith("http") ? `&origin=${encodeURIComponent(location.origin)}` : "";
+  els.youtubeFrame.src = `https://www.youtube.com/embed/${encodeURIComponent(id)}?playsinline=1&rel=0${origin}`;
+  els.youtubeFrame.hidden = false;
+  els.youtubePlaceholder.hidden = true;
+  els.youtubeFrameWrap.classList.remove("empty");
+  setNotice("YouTube参考動画を表示しました。解析動画と並べて目視比較できます。", "success");
+}
+
+els.dropZone.addEventListener("click", () => els.videoFile.click());
+els.dropZone.addEventListener("keydown", event => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    els.videoFile.click();
+  }
+});
+els.dropZone.addEventListener("dragover", event => { event.preventDefault(); els.dropZone.classList.add("dragover"); });
+els.dropZone.addEventListener("dragleave", () => els.dropZone.classList.remove("dragover"));
+els.dropZone.addEventListener("drop", event => {
+  event.preventDefault();
+  els.dropZone.classList.remove("dragover");
+  handleFile(event.dataTransfer.files?.[0]);
+});
+els.videoFile.addEventListener("change", () => handleFile(els.videoFile.files?.[0]));
+els.sourceVideo.addEventListener("loadedmetadata", onVideoLoaded);
+els.sourceVideo.addEventListener("error", () => setNotice("この動画形式をブラウザで再生できません。MP4（H.264）への変換をお試しください。", "error"));
+els.analyzeButton.addEventListener("click", analyzeVideo);
+els.cancelButton.addEventListener("click", () => { cancelRequested = true; });
+els.playPauseButton.addEventListener("click", () => els.sourceVideo.paused ? els.sourceVideo.play() : els.sourceVideo.pause());
+els.prevFrameButton.addEventListener("click", () => seekVideo(els.sourceVideo.currentTime - 1 / DISPLAY_FPS));
+els.nextFrameButton.addEventListener("click", () => seekVideo(els.sourceVideo.currentTime + 1 / DISPLAY_FPS));
+els.timeline.addEventListener("input", () => {
+  if (els.sourceVideo.duration) els.sourceVideo.currentTime = Number(els.timeline.value) / 1000 * els.sourceVideo.duration;
+});
+els.playbackRate.addEventListener("change", () => { els.sourceVideo.playbackRate = Number(els.playbackRate.value); });
+els.jumpHitButton.addEventListener("click", () => {
+  if (analysis?.hitIndex >= 0) seekVideo(analysis.frames[analysis.hitIndex].time);
+});
+els.setHitButton.addEventListener("click", setManualHit);
+els.skeletonToggle.addEventListener("change", () => drawCachedPoseAtTime(els.sourceVideo.currentTime));
+els.loadYoutubeButton.addEventListener("click", loadYouTube);
+els.youtubeUrl.addEventListener("keydown", event => { if (event.key === "Enter") loadYouTube(); });
+els.exportCsvButton.addEventListener("click", exportCsv);
+els.exportImageButton.addEventListener("click", exportCurrentImage);
+els.modelQuality.addEventListener("change", () => {
+  if (loadedModelQuality && loadedModelQuality !== els.modelQuality.value) {
+    setModelStatus("再読込が必要", "idle");
+  }
+});
+
+window.addEventListener("beforeunload", () => {
+  if (sourceObjectUrl) URL.revokeObjectURL(sourceObjectUrl);
+  if (poseLandmarker) poseLandmarker.close();
+});
