@@ -4,250 +4,76 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#10233f" />
-  <title>VolleyMotion Lab｜バレーボール・サーブ動作解析</title>
+  <title>VolleyMotion Lab v2｜ジャンプサーブ解析</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <link rel="preconnect" href="https://storage.googleapis.com" crossorigin />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <header class="app-header">
-    <div>
-      <p class="eyebrow">VOLLEYBALL MOTION ANALYSIS</p>
-      <h1>VolleyMotion Lab</h1>
-      <p class="subtitle">後方から撮影したサーブ動画に、骨格点と打点候補を自動表示</p>
-    </div>
-    <div class="privacy-badge" title="動画はブラウザ内で解析します">
-      <span aria-hidden="true">🔒</span>
-      <span>端末内解析</span>
-    </div>
-  </header>
+<header class="app-header">
+  <div><p class="eyebrow">BODY × HAND × BALL</p><h1>VolleyMotion Lab v2</h1><p class="subtitle">ジャンプサーブの身体・手・ボール回転を一体解析</p></div>
+  <div class="privacy-badge"><span>🔒</span><span>端末内解析</span></div>
+</header>
+<main class="app-shell">
+<section class="panel setup-panel">
+  <div class="panel-heading"><div><p class="step-label">STEP 1</p><h2>動画と解析条件</h2></div><span id="modelStatus" class="status-pill status-idle">AI未準備</span></div>
+  <div id="dropZone" class="drop-zone" tabindex="0" role="button">
+    <input id="videoFile" type="file" accept="video/*,.mp4,.mov,.m4v,.webm" hidden />
+    <div class="drop-icon">🎥</div><strong>動画をここへドロップ</strong><span>またはクリックして選択</span>
+    <small>60fps以上推奨。回転解析は120〜240fps、ボール表面が見える映像ほど精度が上がります。</small>
+  </div>
+  <div class="settings-grid">
+    <label>利き腕<select id="handedness"><option value="left" selected>左利き（宮浦選手）</option><option value="right">右利き</option></select></label>
+    <label>撮影方向<select id="viewDirection"><option value="rear" selected>後方</option><option value="side">側方</option><option value="diagonal">斜め後方</option></select></label>
+    <label>サーブ種類<select id="serveType"><option value="jump" selected>ジャンプサーブ</option><option value="jump-float">ジャンプフローター</option><option value="float">フローター</option></select></label>
+    <label>AIモデル<select id="modelQuality"><option value="full" selected>高精度</option><option value="lite">軽量</option></select></label>
+    <label>解析開始（秒）<input id="clipStart" type="number" min="0" step="0.05" value="0" /></label>
+    <label>解析終了（秒）<input id="clipEnd" type="number" min="0" step="0.05" value="0" /></label>
+  </div>
+  <div class="primary-actions"><button id="analyzeButton" class="button primary" disabled>✨ 身体と手を自動解析</button><button id="cancelButton" class="button ghost" hidden>中止</button></div>
+  <div id="progressWrap" class="progress-wrap" hidden><div class="progress-row"><span id="progressText">準備中</span><span id="progressPercent">0%</span></div><progress id="analysisProgress" max="100" value="0"></progress></div>
+  <div id="notice" class="notice">動画を選択してください。身体33点と打点付近の手21点を自動検出します。</div>
+</section>
 
-  <main class="app-shell">
-    <section class="panel setup-panel" aria-labelledby="setup-title">
-      <div class="panel-heading">
-        <div>
-          <p class="step-label">STEP 1</p>
-          <h2 id="setup-title">動画と解析条件</h2>
-        </div>
-        <span id="modelStatus" class="status-pill status-idle">AI未準備</span>
-      </div>
+<section class="workspace">
+<section class="panel video-panel">
+  <div class="panel-heading compact"><div><p class="step-label">STEP 2</p><h2>動画・解析表示</h2></div><div class="toggle-row"><label class="switch-label"><input id="skeletonToggle" type="checkbox" checked><span>骨格</span></label><label class="switch-label"><input id="handToggle" type="checkbox" checked><span>手</span></label><label class="switch-label"><input id="ballToggle" type="checkbox" checked><span>ボール</span></label></div></div>
+  <div id="videoStage" class="video-stage empty"><video id="sourceVideo" playsinline preload="metadata"></video><canvas id="overlayCanvas"></canvas><div id="videoPlaceholder" class="video-placeholder"><span>🏐</span><p>動画を選択すると表示されます。</p></div></div>
+  <div class="video-controls"><button id="playPauseButton" class="icon-button" disabled>▶</button><button id="prevFrameButton" class="icon-button" disabled>−1F</button><button id="nextFrameButton" class="icon-button" disabled>+1F</button><input id="timeline" type="range" min="0" max="1000" value="0" disabled><span id="timeDisplay" class="time-display">0.00 / 0.00 秒</span><select id="playbackRate" disabled><option value="0.1">0.1×</option><option value="0.25" selected>0.25×</option><option value="0.5">0.5×</option><option value="1">1.0×</option></select></div>
+  <div class="hit-controls"><button id="jumpHitButton" class="button small" disabled>打点候補へ</button><button id="setHitButton" class="button small secondary" disabled>現在位置を打点に設定</button><span id="hitTimeLabel">打点候補：未解析</span></div>
+  <div class="ball-controls">
+    <div><strong>ボール追跡</strong><small>打点付近で「ボールを指定」を押し、動画上のボール中心をクリック</small></div>
+    <label>半径<input id="ballRadius" type="range" min="8" max="70" value="24"><span id="ballRadiusLabel">24px</span></label>
+    <button id="selectBallButton" class="button small secondary" disabled>① ボールを指定</button>
+    <button id="trackBallButton" class="button small" disabled>② 自動追跡・回転推定</button>
+    <button id="clearBallButton" class="button small ghost" disabled>解除</button>
+  </div>
+</section>
+<aside class="panel reference-panel">
+  <div class="panel-heading compact"><div><p class="step-label">REFERENCE</p><h2>YouTube参考動画</h2></div></div>
+  <div class="youtube-form"><input id="youtubeUrl" type="url" placeholder="YouTube URL"><button id="loadYoutubeButton" class="button secondary">表示</button></div>
+  <div id="youtubeFrameWrap" class="youtube-frame-wrap empty"><iframe id="youtubeFrame" title="YouTube参考動画" allowfullscreen hidden></iframe><p id="youtubePlaceholder">参考映像を横に表示します。URL映像自体は自動解析しません。</p></div>
+  <p class="fine-print">解析には、利用権限のある動画ファイルを読み込んでください。</p>
+</aside>
+</section>
 
-      <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="動画ファイルを選択">
-        <input id="videoFile" type="file" accept="video/*,.mp4,.mov,.m4v,.webm" hidden />
-        <div class="drop-icon" aria-hidden="true">🎥</div>
-        <strong>動画をここへドロップ</strong>
-        <span>またはクリックして MP4 / MOV / WebM を選択</span>
-        <small>後方から、選手の全身が画面内に入る動画がおすすめです。</small>
-      </div>
-
-      <div class="settings-grid">
-        <label>
-          利き腕
-          <select id="handedness">
-            <option value="right" selected>右利き</option>
-            <option value="left">左利き</option>
-          </select>
-        </label>
-        <label>
-          撮影方向
-          <select id="viewDirection">
-            <option value="rear" selected>後方</option>
-            <option value="side">側方</option>
-            <option value="diagonal">斜め後方</option>
-          </select>
-        </label>
-        <label>
-          サーブ種類
-          <select id="serveType">
-            <option value="jump-float" selected>ジャンプフローター</option>
-            <option value="float">フローター</option>
-            <option value="jump">ジャンプサーブ</option>
-            <option value="other">その他</option>
-          </select>
-        </label>
-        <label>
-          AIモデル
-          <select id="modelQuality">
-            <option value="full" selected>高精度</option>
-            <option value="lite">軽量</option>
-          </select>
-        </label>
-        <label>
-          解析開始（秒）
-          <input id="clipStart" type="number" min="0" step="0.1" value="0" />
-        </label>
-        <label>
-          解析終了（秒）
-          <input id="clipEnd" type="number" min="0" step="0.1" value="0" />
-        </label>
-      </div>
-
-      <div class="primary-actions">
-        <button id="analyzeButton" class="button primary" disabled>
-          <span aria-hidden="true">✨</span> 自動解析する
-        </button>
-        <button id="cancelButton" class="button ghost" hidden>解析を中止</button>
-      </div>
-
-      <div id="progressWrap" class="progress-wrap" hidden>
-        <div class="progress-row">
-          <span id="progressText">準備中…</span>
-          <span id="progressPercent">0%</span>
-        </div>
-        <progress id="analysisProgress" max="100" value="0"></progress>
-      </div>
-
-      <div id="notice" class="notice" role="status">
-        最初に動画を選択してください。AIは身体の33点を自動検出します。
-      </div>
-    </section>
-
-    <section class="workspace">
-      <section class="panel video-panel" aria-labelledby="video-title">
-        <div class="panel-heading compact">
-          <div>
-            <p class="step-label">STEP 2</p>
-            <h2 id="video-title">動画・骨格表示</h2>
-          </div>
-          <label class="switch-label">
-            <input id="skeletonToggle" type="checkbox" checked />
-            <span>骨格</span>
-          </label>
-        </div>
-
-        <div id="videoStage" class="video-stage empty">
-          <video id="sourceVideo" playsinline preload="metadata"></video>
-          <canvas id="overlayCanvas"></canvas>
-          <div id="videoPlaceholder" class="video-placeholder">
-            <span aria-hidden="true">🏐</span>
-            <p>解析する動画を選択すると、ここに表示されます。</p>
-          </div>
-        </div>
-
-        <div class="video-controls">
-          <button id="playPauseButton" class="icon-button" disabled aria-label="再生・一時停止">▶</button>
-          <button id="prevFrameButton" class="icon-button" disabled aria-label="1フレーム戻る">−1F</button>
-          <button id="nextFrameButton" class="icon-button" disabled aria-label="1フレーム進む">+1F</button>
-          <input id="timeline" type="range" min="0" max="1000" value="0" disabled aria-label="再生位置" />
-          <span id="timeDisplay" class="time-display">0.00 / 0.00 秒</span>
-          <select id="playbackRate" disabled aria-label="再生速度">
-            <option value="0.25">0.25×</option>
-            <option value="0.5" selected>0.5×</option>
-            <option value="1">1.0×</option>
-          </select>
-        </div>
-
-        <div class="hit-controls">
-          <button id="jumpHitButton" class="button small" disabled>打点候補へ移動</button>
-          <button id="setHitButton" class="button small secondary" disabled>現在位置を打点に設定</button>
-          <span id="hitTimeLabel">打点候補：未解析</span>
-        </div>
-      </section>
-
-      <aside class="panel reference-panel" aria-labelledby="youtube-title">
-        <div class="panel-heading compact">
-          <div>
-            <p class="step-label">REFERENCE</p>
-            <h2 id="youtube-title">YouTube参考動画</h2>
-          </div>
-        </div>
-        <div class="youtube-form">
-          <input id="youtubeUrl" type="url" placeholder="YouTube URLを貼り付け" />
-          <button id="loadYoutubeButton" class="button secondary">表示</button>
-        </div>
-        <div id="youtubeFrameWrap" class="youtube-frame-wrap empty">
-          <iframe id="youtubeFrame" title="YouTube参考動画" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen hidden></iframe>
-          <p id="youtubePlaceholder">参考動画を横に表示できます。YouTube映像自体のAI解析は行いません。</p>
-        </div>
-        <p class="fine-print">YouTubeは埋め込み再生・目視比較用です。自動解析する場合は、利用権限のある元動画ファイルを読み込んでください。</p>
-      </aside>
-    </section>
-
-    <section class="panel results-panel" aria-labelledby="results-title">
-      <div class="panel-heading">
-        <div>
-          <p class="step-label">STEP 3</p>
-          <h2 id="results-title">解析結果</h2>
-        </div>
-        <div class="result-actions">
-          <button id="exportCsvButton" class="button small" disabled>CSV保存</button>
-          <button id="exportImageButton" class="button small" disabled>現在画面を画像保存</button>
-        </div>
-      </div>
-
-      <div class="metric-grid">
-        <article class="metric-card">
-          <span>打点時の肘角度</span>
-          <strong id="elbowMetric">—</strong>
-          <small>利き腕側</small>
-        </article>
-        <article class="metric-card">
-          <span>打点時の膝角度</span>
-          <strong id="kneeMetric">—</strong>
-          <small>左右平均</small>
-        </article>
-        <article class="metric-card">
-          <span>肩の傾き</span>
-          <strong id="shoulderMetric">—</strong>
-          <small>水平からの角度</small>
-        </article>
-        <article class="metric-card">
-          <span>体幹の左右傾き</span>
-          <strong id="trunkMetric">—</strong>
-          <small>後方動画で有効</small>
-        </article>
-        <article class="metric-card accent">
-          <span>骨格検出率</span>
-          <strong id="detectionMetric">—</strong>
-          <small>解析フレーム中</small>
-        </article>
-      </div>
-
-      <div class="result-layout">
-        <div class="chart-card">
-          <div class="chart-heading">
-            <h3>角度の時間変化</h3>
-            <span class="legend-note">破線位置＝打点候補</span>
-          </div>
-          <canvas id="angleChart" aria-label="関節角度グラフ"></canvas>
-          <div id="chartEmpty" class="chart-empty">解析後にグラフが表示されます。</div>
-        </div>
-
-        <div class="observation-card">
-          <h3>自動観察メモ</h3>
-          <div id="observationText" class="observation-text">
-            動画解析後、打点候補とフォームの特徴をここに表示します。
-          </div>
-          <div class="caution-box">
-            <strong>測定上の注意</strong>
-            <p>単眼動画による推定値です。ボール接触そのものを検出していないため、「打点候補」は利き腕の高さ・伸展・速度から推定します。必ずスロー再生で確認してください。</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="phase-section">
-        <h3>動作局面</h3>
-        <div id="phaseButtons" class="phase-buttons">
-          <span class="muted">解析後に候補時刻が表示されます。</span>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel guide-panel">
-      <h2>撮影のコツ</h2>
-      <div class="guide-grid">
-        <div><strong>1</strong><span>スマホを固定し、選手の全身とボール軌道が入る距離を取る</span></div>
-        <div><strong>2</strong><span>後方中央から撮り、カメラの傾きを小さくする</span></div>
-        <div><strong>3</strong><span>可能なら60fps、明るい場所、背景と服の色を分ける</span></div>
-      </div>
-    </section>
-  </main>
-
-  <footer>
-    <p>VolleyMotion Lab MVP — MediaPipe Pose Landmarkerを利用した教育・探究用試作</p>
-  </footer>
-
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js" crossorigin="anonymous"></script>
-  <script type="module" src="./app.js"></script>
-</body>
-</html>
+<section class="panel results-panel">
+  <div class="panel-heading"><div><p class="step-label">STEP 3</p><h2>解析結果</h2></div><div class="result-actions"><button id="exportCsvButton" class="button small" disabled>CSV保存</button><button id="exportImageButton" class="button small" disabled>画像保存</button></div></div>
+  <div class="metric-grid">
+    <article class="metric-card"><span>打点時の肘角度</span><strong id="elbowMetric">—</strong><small>利き腕側</small></article>
+    <article class="metric-card"><span>手首速度</span><strong id="handSpeedMetric">—</strong><small>画面幅/秒</small></article>
+    <article class="metric-card"><span>手とボール中心のずれ</span><strong id="contactOffsetMetric">—</strong><small>ボール半径比</small></article>
+    <article class="metric-card"><span>ボール速度</span><strong id="ballSpeedMetric">—</strong><small>画面幅/秒</small></article>
+    <article class="metric-card accent"><span>推定回転数</span><strong id="rpmMetric">—</strong><small id="rpmConfidence">ボール追跡後</small></article>
+    <article class="metric-card"><span>骨格検出率</span><strong id="detectionMetric">—</strong><small>解析フレーム中</small></article>
+  </div>
+  <div class="result-layout"><div class="chart-card"><div class="chart-heading"><h3>動作の時間変化</h3><span class="legend-note">破線＝打点候補</span></div><canvas id="angleChart"></canvas><div id="chartEmpty" class="chart-empty">解析後に表示されます。</div></div>
+  <div class="observation-card"><h3>自動観察メモ</h3><div id="observationText" class="observation-text">解析後に表示します。</div><div class="caution-box"><strong>回転数について</strong><p>表面模様の角度変化から求める試験的推定です。低fps・ブレ・無地に近いボールでは誤差が大きくなります。値と信頼度をセットで扱ってください。</p></div></div></div>
+  <div class="phase-section"><h3>動作局面</h3><div id="phaseButtons" class="phase-buttons"><span class="muted">解析後に表示されます。</span></div></div>
+</section>
+<section class="panel guide-panel"><h2>宮浦選手型の分析ポイント</h2><div class="guide-grid"><div><strong>1</strong><span>左肩・骨盤の回転差と解放タイミング</span></div><div><strong>2</strong><span>左肘の伸展、手首速度、打点位置</span></div><div><strong>3</strong><span>回転数・回転方向・打球軌道の関係</span></div></div></section>
+</main>
+<footer><p>VolleyMotion Lab v2 — 教育・探究用プロトタイプ</p></footer>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+<script type="module" src="./app.js"></script>
+</body></html>
