@@ -1,17 +1,12 @@
-VolleyVision AI iPad 5.0
+VolleyVision AI iPad 5.1（起動安定版）
 
-GitHub Pagesへの配置:
-1. このZIPを展開
-2. index.html / assets / wasm / README.txt をリポジトリ直下へアップロード
-3. Settings → Pages → main / root
-4. 公開URLをiPadのSafariで開く
+GitHub Pagesへの入れ方
+1. このフォルダ内の中身をリポジトリ直下へ置く
+2. index.html / assets / wasm / README.txt が直下に見える状態にする
+3. Settings > Pages: main / (root)
+4. 公開後に ?v=51 を付けて再読み込み
 
-特徴:
-- iPadの写真・ファイル・カメラから直接選択
-- 写真1枚と動画の両方に対応
-- 動画解析は最大60フレーム・640pxへ軽量化
-- 解析後だけ軽量3Dを起動
-- WebGLが使えない場合は2D立体表示へ自動切替
-- 回転数・奥行き・接触位置はAI推定として明示
-
-初回のAI解析時はモデル取得のためインターネット接続が必要です。
+重要
+- 起動画面は index.html に直接入っているため、AIや3Dの読み込みに失敗しても真っ暗になりません。
+- AIは解析ボタンを押したときだけ読み込みます。
+- 3Dは解析後にボタンを押したときだけ読み込みます。

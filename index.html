@@ -2,12 +2,94 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=yes" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#07131f" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>VolleyVision AI iPad 5.0</title>
-  <link rel="stylesheet" href="./assets/style.css" />
+  <title>VolleyVision AI iPad 5.1</title>
+  <script>
+    window.__bootErrors=[];
+    window.addEventListener('error',e=>{window.__bootErrors.push(e.message||'起動エラー');const x=document.getElementById('bootError');if(x){x.hidden=false;x.textContent='起動エラー: '+(e.message||'不明なエラー');}});
+    window.addEventListener('unhandledrejection',e=>{const m=e.reason?.message||String(e.reason||'不明なエラー');window.__bootErrors.push(m);const x=document.getElementById('bootError');if(x){x.hidden=false;x.textContent='読み込みエラー: '+m;}});
+  </script>
+  <script type="module" crossorigin src="./assets/index-1t6NXvVl.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/mediapipe-C1iGtzqX.js">
+  <link rel="stylesheet" crossorigin href="./assets/style-CNAWyRVg.css">
 </head>
-<body><div id="app"></div><script type="module" src="./assets/app.js"></script></body>
+<body>
+  <div id="appShell" class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="logo">🏐</span><div><h1>VolleyVision AI <small>iPad 5.1</small></h1><p>写真・動画から、腕・手・ボールを軽量解析</p></div></div>
+      <span class="privacy">🔒 端末内解析</span>
+    </header>
+
+    <main class="page">
+      <section id="startCard" class="card start-card">
+        <div class="eyebrow">START</div>
+        <h2>写真または動画を選ぶ</h2>
+        <p>iPadでは下のボタンをタップしてください。ドラッグ操作は不要です。</p>
+        <div class="source-grid">
+          <label class="source source-video"><input id="videoInput" type="file" accept="video/mp4,video/quicktime,video/x-m4v,video/*"><span>🎬</span><strong>サーブ動画</strong><small>MP4・MOV</small></label>
+          <label class="source source-photo"><input id="photoInput" type="file" accept="image/jpeg,image/png,image/heic,image/heif,image/*"><span>🖼️</span><strong>写真</strong><small>JPEG・PNG・HEIC</small></label>
+          <label class="source source-camera"><input id="cameraInput" type="file" accept="image/*,video/*" capture="environment"><span>📷</span><strong>カメラ</strong><small>その場で撮影</small></label>
+        </div>
+        <div id="bootError" class="error-box" hidden></div>
+        <p class="boot-note">この画面が見えていれば起動は成功です。AIは「解析開始」を押した時だけ読み込みます。</p>
+      </section>
+
+      <section id="workspace" class="card workspace" hidden>
+        <div class="toolbar">
+          <button id="backBtn" class="btn ghost">← 別のファイル</button>
+          <label>利き腕 <select id="dominant"><option value="left" selected>左</option><option value="right">右</option></select></label>
+          <span class="spacer"></span>
+          <button id="analyzeBtn" class="btn primary">🤖 AI解析を開始</button>
+        </div>
+
+        <div class="main-grid">
+          <section class="media-panel">
+            <div class="panel-head"><b id="fileName">MEDIA</b><span id="mediaInfo">—</span></div>
+            <div id="mediaStage" class="media-stage">
+              <video id="video" controls playsinline hidden></video>
+              <img id="photo" alt="解析対象" hidden>
+              <canvas id="overlay"></canvas>
+              <div id="scanline" class="scanline" hidden></div>
+              <div id="stageMessage" class="stage-message">ファイルを読み込みました。「AI解析を開始」を押してください。</div>
+            </div>
+            <div class="framebar">
+              <button id="prevBtn" class="btn mini" disabled>◀ 1コマ</button>
+              <button id="nextBtn" class="btn mini" disabled>1コマ ▶</button>
+              <button id="pickBallBtn" class="btn accent" disabled>🏐 ボール中心を指定</button>
+            </div>
+          </section>
+
+          <aside class="monitor">
+            <div class="monitor-title"><span>ANALYSIS MONITOR</span><strong id="percent">0%</strong></div>
+            <div class="progress"><i id="progressBar"></i></div>
+            <div class="task"><span>⚙️ AIモデル</span><b id="modelState">WAIT</b></div>
+            <div class="task"><span>🦴 身体33点</span><b id="poseState">WAIT</b></div>
+            <div class="task"><span>✋ 利き手</span><b id="handState">WAIT</b></div>
+            <div class="task"><span>⚡ 打点候補</span><b id="impactState">WAIT</b></div>
+            <div class="live"><span>FRAME</span><b id="frameStat">0 / 0</b><span>TIME</span><b id="timeStat">0.00 s</b><span>POSE</span><b id="poseStat">未検出</b><span>HAND</span><b id="handStat">未検出</b></div>
+            <div id="statusBox" class="status-box">準備完了</div>
+          </aside>
+        </div>
+
+        <section id="results" class="results" hidden>
+          <div class="results-head"><div><span class="eyebrow">RESULT</span><h2>解析結果</h2></div><button id="open3dBtn" class="btn secondary">360°で見る</button></div>
+          <div class="metric-grid">
+            <div class="metric measured"><small>肘角度</small><strong id="elbowMetric">—</strong><span>映像から計算</span></div>
+            <div class="metric measured"><small>手の進入角</small><strong id="approachMetric">—</strong><span>映像から計算</span></div>
+            <div class="metric measured"><small>打点候補</small><strong id="impactMetric">—</strong><span>AI候補</span></div>
+            <div class="metric estimated"><small>接触位置</small><strong id="contactMetric">未指定</strong><span>AI推定</span></div>
+            <div class="metric estimated"><small>回転傾向</small><strong id="spinMetric">未判定</strong><span>AI予測</span></div>
+            <div class="metric estimated"><small>信頼度</small><strong id="qualityMetric">—</strong><span>単眼推定</span></div>
+          </div>
+          <div id="threeWrap" class="three-wrap" hidden>
+            <div id="threeRoot" class="three-root"></div>
+            <div class="view-buttons"><button data-view="front">正面</button><button data-view="side">側面</button><button data-view="top">上</button><button data-view="ball">ボール中心</button></div>
+          </div>
+          <div id="aiComment" class="ai-comment">ボール中心をタップすると、接触位置の推定を追加します。</div>
+        </section>
+      </section>
+    </main>
+  </div>
+</body>
 </html>
