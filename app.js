@@ -1,199 +1,533 @@
-let FilesetResolver=null, PoseLandmarker=null, HandLandmarker=null, DrawingUtils=null;
-let visionModulePromise=null;
-async function loadVisionModule(){
-  if(FilesetResolver&&PoseLandmarker&&HandLandmarker&&DrawingUtils)return;
-  if(!visionModulePromise){
-    visionModulePromise=import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs");
-  }
-  const mod=await visionModulePromise;
-  ({FilesetResolver,PoseLandmarker,HandLandmarker,DrawingUtils}=mod);
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  input: $('videoInput'), drop: $('dropZone'), fileInfo: $('fileInfo'), loadState: $('loadState'),
+  workspace: $('workspace'), marking: $('markingSection'), results: $('resultsSection'), compare: $('compareSection'),
+  video: $('video'), overlay: $('overlay'), processor: $('processor'), stage: $('stage'),
+  playBtn: $('playBtn'), prevBtn: $('prevFrameBtn'), nextBtn: $('nextFrameBtn'), speed: $('speedSelect'),
+  timeline: $('timeline'), currentTime: $('currentTime'), frameNo: $('frameNo'), duration: $('duration'),
+  fps: $('fpsInput'), ballRadius: $('ballRadiusInput'), trackFrames: $('trackFramesInput'),
+  setContact: $('setContactFrameBtn'), contactText: $('contactFrameText'), state: $('analysisState'),
+  markHelp: $('markingHelp'), clearMarks: $('clearMarksBtn'), autoTrack: $('autoTrackBtn'), calculate: $('calculateBtn'),
+  metrics: $('metrics'), contactDiagram: $('contactDiagram'), trajectoryChart: $('trajectoryChart'), quality: $('qualityBadge'),
+  saveServe: $('saveServeBtn'), csv: $('downloadCsvBtn'), compareBody: $('compareBody'), clearCompare: $('clearCompareBtn')
+};
+
+const ctx = els.overlay.getContext('2d');
+const pctx = els.processor.getContext('2d', { willReadFrequently: true });
+const state = {
+  objectUrl: null,
+  file: null,
+  contactTime: null,
+  activeMode: null,
+  marks: {},
+  trajectory: [],
+  trackingScores: [],
+  result: null,
+  loading: false,
+  dragging: false
+};
+
+const COLORS = {
+  ball: '#ffe44d', contact: '#ff4757', wristBefore: '#7bed9f', wristContact: '#2ed573',
+  indexBase: '#70a1ff', pinkyBase: '#a29bfe'
+};
+const LABELS = {
+  ball: 'ボール中心', contact: '接触点', wristBefore: '直前の手首', wristContact: '接触時の手首',
+  indexBase: '人差し指付け根', pinkyBase: '小指付け根'
+};
+
+function setStatus(text, kind = 'ok') {
+  els.state.textContent = text;
+  els.state.className = 'status' + (kind === 'muted' ? ' muted' : '');
 }
 
-const WASM_URL="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
-const POSE_MODELS={full:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",lite:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"};
-const HAND_MODEL="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
-const SAMPLE_FPS=15, MAX_SAMPLES=900, MIN_VIS=.35;
-const P={LS:11,RS:12,LE:13,RE:14,LW:15,RW:16,LH:23,RH:24,LK:25,RK:26,LA:27,RA:28};
-const ids=["videoFile","dropZone","chooseVideoButton","selectedFileName","handedness","viewDirection","serveType","modelQuality","clipStart","clipEnd","analyzeButton","cancelButton","progressWrap","progressText","progressPercent","analysisProgress","notice","modelStatus","sourceVideo","overlayCanvas","videoStage","playPauseButton","prevFrameButton","nextFrameButton","timeline","timeDisplay","playbackRate","skeletonToggle","handToggle","ballToggle","jumpHitButton","setHitButton","hitTimeLabel","ballRadius","ballRadiusLabel","autoBallButton","selectBallButton","trackBallButton","clearBallButton","youtubeUrl","loadYoutubeButton","youtubeFrameWrap","youtubeFrame","youtubePlaceholder","exportCsvButton","exportImageButton","elbowMetric","handSpeedMetric","contactOffsetMetric","ballSpeedMetric","rpmMetric","rpmConfidence","detectionMetric","angleChart","chartEmpty","observationText","phaseButtons","rotationPrevButton","rotationPlayButton","rotationNextButton","rotationFrameLabel","ballZoomCanvas","zoomScale","zoomScaleLabel","differenceToggle","frameAngleMetric","cumulativeAngleMetric","rotationDirectionMetric","trackingQualityMetric","rotationAxisCanvas","handApproachMetric","palmAngleMetric","contactPositionMetric","launchAngleMetric","lateralChangeMetric","dropChangeMetric","spinLevelMetric","saveTrialButton","trialName","clearTrialsButton","trialTableBody","scatterChart","scatterEmpty","contactStripCanvas","refreshContactButton"];
-const el=Object.fromEntries(ids.map(id=>[id,document.getElementById(id)]));
-const ctx=el.overlayCanvas.getContext("2d",{willReadFrequently:true});
-const work=document.createElement("canvas"), wctx=work.getContext("2d",{willReadFrequently:true});
-let pose=null, hand=null, drawer=null, quality=null, analysis=null, url=null, raf=null, cancel=false, selectingBall=false, ballSeed=null, chart=null, tsBase=0, rotationIndex=0, rotationTimer=null;
+function fps() { return Math.max(1, Number(els.fps.value) || 30); }
+function frameDuration() { return 1 / fps(); }
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+function deg(rad) { return rad * 180 / Math.PI; }
+function round(v, d = 1) { const p = 10 ** d; return Math.round(v * p) / p; }
+function angleBetween(a, b) { return deg(Math.atan2(-(b.y - a.y), b.x - a.x)); }
+function formatAngle(a) { return Number.isFinite(a) ? `${round(a)}°` : '未測定'; }
 
-const clamp=(v,a=0,b=1)=>Math.min(b,Math.max(a,v));
-const visible=p=>p&&((p.visibility??1)>=MIN_VIS);
-const mid=(a,b)=>a&&b?{x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:((a.z||0)+(b.z||0))/2,visibility:Math.min(a.visibility??1,b.visibility??1)}:null;
-function angle(a,b,c){if(![a,b,c].every(visible))return NaN;const u=[a.x-b.x,a.y-b.y,(a.z||0)-(b.z||0)],v=[c.x-b.x,c.y-b.y,(c.z||0)-(b.z||0)];const d=u[0]*v[0]+u[1]*v[1]+u[2]*v[2],lu=Math.hypot(...u),lv=Math.hypot(...v);return lu&&lv?Math.acos(clamp(d/(lu*lv),-1,1))*180/Math.PI:NaN}
-function setNotice(t,type="info"){el.notice.textContent=t;el.notice.className=`notice${type==="info"?"":` ${type}`}`}
-function status(t,s){el.modelStatus.textContent=t;el.modelStatus.className=`status-pill status-${s}`}
-function fmt(v,d=2){return Number.isFinite(v)?v.toFixed(d):"—"}
-function progress(done,total,text){const p=total?Math.round(done/total*100):0;el.analysisProgress.value=p;el.progressPercent.textContent=`${p}%`;el.progressText.textContent=text}
-async function models(){if(pose&&hand&&quality===el.modelQuality.value)return;status("AI読込中","loading");await loadVisionModule();const vision=await FilesetResolver.forVisionTasks(WASM_URL);pose?.close();hand?.close();pose=await PoseLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:POSE_MODELS[el.modelQuality.value],delegate:"GPU"},runningMode:"VIDEO",numPoses:1,minPoseDetectionConfidence:.45,minPosePresenceConfidence:.45,minTrackingConfidence:.45});hand=await HandLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:HAND_MODEL,delegate:"GPU"},runningMode:"VIDEO",numHands:2,minHandDetectionConfidence:.35,minHandPresenceConfidence:.35,minTrackingConfidence:.35});quality=el.modelQuality.value;drawer=new DrawingUtils(ctx);status("AI準備完了","ready")}
-function metrics(l,side){const left=side==="left",S=l[left?P.LS:P.RS],E=l[left?P.LE:P.RE],W=l[left?P.LW:P.RW],ls=l[P.LS],rs=l[P.RS],lh=l[P.LH],rh=l[P.RH],sm=mid(ls,rs),hm=mid(lh,rh);const torso=sm&&hm?Math.hypot(sm.x-hm.x,sm.y-hm.y):NaN;return{elbow:angle(S,E,W),knee:(angle(lh,l[P.LK],l[P.LA])+angle(rh,l[P.RK],l[P.RA]))/2,wristX:W?.x,wristY:W?.y,wristVis:W?.visibility??0,wristHigh:visible(W)&&visible(S)&&torso?(S.y-W.y)/torso:NaN,trunk:sm&&hm?Math.atan2(sm.x-hm.x,hm.y-sm.y)*180/Math.PI:NaN,hipY:hm?.y}}
-function seek(t){const v=el.sourceVideo,target=clamp(t,0,Math.max(0,(v.duration||0)-.001));if(Math.abs(v.currentTime-target)<.002)return Promise.resolve();return new Promise((res,rej)=>{const to=setTimeout(()=>{clean();rej(Error("動画の移動がタイムアウトしました"))},5000),clean=()=>{clearTimeout(to);v.removeEventListener("seeked",ok);v.removeEventListener("error",bad)},ok=()=>{clean();res()},bad=()=>{clean();rej(Error("動画を読み取れません"))};v.addEventListener("seeked",ok,{once:true});v.addEventListener("error",bad,{once:true});v.currentTime=target})}
-function nearest(t){if(!analysis?.frames.length)return-1;let best=0,d=Infinity;analysis.frames.forEach((f,i)=>{const x=Math.abs(f.time-t);if(x<d){d=x;best=i}});return best}
-function hitEstimate(fr){const speeds=fr.map(()=>0);for(let i=1;i<fr.length;i++){const a=fr[i-1].m,b=fr[i].m,dt=fr[i].time-fr[i-1].time;if(a&&b&&dt>0&&Number.isFinite(a.wristX)&&Number.isFinite(b.wristX))speeds[i]=Math.hypot(b.wristX-a.wristX,b.wristY-a.wristY)/dt}const max=Math.max(...speeds,.001);let bi=-1,bs=-1;fr.forEach((f,i)=>{if(!f.m||f.m.wristVis<MIN_VIS)return;const s=.48*clamp((f.m.wristHigh+.1)/1.4)+.32*clamp((f.m.elbow-100)/80)+.2*clamp(speeds[i]/max);if(s>bs){bs=s;bi=i}});fr.forEach((f,i)=>f.wristSpeed=speeds[i]);return bi}
-async function analyze(){const v=el.sourceVideo;if(!v.src)return;cancel=false;el.analyzeButton.disabled=true;el.cancelButton.hidden=false;el.progressWrap.hidden=false;v.pause();try{await models();const start=clamp(+el.clipStart.value||0,0,v.duration),end=clamp(+el.clipEnd.value||v.duration,start+.05,v.duration),dur=end-start;let n=Math.min(MAX_SAMPLES,Math.floor(dur*SAMPLE_FPS)+1),fps=(n-1)/dur;const frames=[];tsBase=Math.max(performance.now(),tsBase+1000);for(let i=0;i<n;i++){if(cancel)throw new DOMException("中止","AbortError");const time=start+(i/(n-1))*dur;await seek(time);const r=pose.detectForVideo(v,tsBase+i*1000/fps),lm=r.landmarks?.[0]?.map(x=>({...x}))||null;frames.push({time,landmarks:lm,m:lm?metrics(lm,el.handedness.value):null,hands:null,wristSpeed:0});progress(i+1,n,"身体33点を解析中");if(i%5===0)await new Promise(r=>setTimeout(r,0))}const hi=hitEstimate(frames);analysis={frames,hitIndex:hi,handedness:el.handedness.value,sampleFps:fps,ball:[],rpm:null,rpmConfidence:0,rotationSteps:[]};if(hi>=0){const range=Math.max(3,Math.round(.28*fps)),a=Math.max(0,hi-range),b=Math.min(n-1,hi+range);for(let i=a;i<=b;i++){if(cancel)throw new DOMException("中止","AbortError");await seek(frames[i].time);const r=hand.detectForVideo(v,tsBase+100000+i*1000/fps);frames[i].hands=chooseHand(r,frames[i].landmarks,analysis.handedness);progress(i-a+1,b-a+1,"打点付近の手21点を解析中")}}renderResults();if(hi>=0)await seek(frames[hi].time);setNotice("身体と手の解析が完了しました。続けて「ボール候補を自動検出」を押してください。","success")}catch(e){console.error(e);setNotice(e.name==="AbortError"?"解析を中止しました。":e.message,"error")}finally{el.analyzeButton.disabled=false;el.cancelButton.hidden=true;setTimeout(()=>el.progressWrap.hidden=true,500)}}
-function chooseHand(r,poseLm,side){if(!r.landmarks?.length)return null;const wi=side==="left"?P.LW:P.RW,pw=poseLm?.[wi];let bi=0,bd=Infinity;r.landmarks.forEach((h,i)=>{const w=h[0],d=pw?Math.hypot(w.x-pw.x,w.y-pw.y):i;if(d<bd){bd=d;bi=i}});return r.landmarks[bi].map(x=>({...x}))}
-function render(){ctx.clearRect(0,0,el.overlayCanvas.width,el.overlayCanvas.height);if(!analysis)return;const i=nearest(el.sourceVideo.currentTime),f=analysis.frames[i];if(f?.landmarks&&el.skeletonToggle.checked){drawer.drawConnectors(f.landmarks,PoseLandmarker.POSE_CONNECTIONS,{color:"rgba(61,214,231,.92)",lineWidth:3});drawer.drawLandmarks(f.landmarks,{color:"#fff",fillColor:"#2563eb",radius:4})}if(f?.hands&&el.handToggle.checked){drawer.drawConnectors(f.hands,HandLandmarker.HAND_CONNECTIONS,{color:"#f97316",lineWidth:3});drawer.drawLandmarks(f.hands,{color:"#fff",fillColor:"#f97316",radius:3})}if(analysis.ball?.length&&el.ballToggle.checked){ctx.save();ctx.strokeStyle="#facc15";ctx.lineWidth=3;ctx.beginPath();analysis.ball.forEach((b,j)=>{const x=b.x*ctx.canvas.width,y=b.y*ctx.canvas.height;j?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();const b=ballAt(f.time);if(b){ctx.beginPath();ctx.arc(b.x*ctx.canvas.width,b.y*ctx.canvas.height,b.r,0,Math.PI*2);ctx.strokeStyle="#ef4444";ctx.stroke()}ctx.restore()}if(ballSeed&&!analysis.ball?.length&&el.ballToggle.checked){ctx.save();ctx.strokeStyle="#22c55e";ctx.lineWidth=4;ctx.setLineDash([8,5]);ctx.beginPath();ctx.arc(ballSeed.x*ctx.canvas.width,ballSeed.y*ctx.canvas.height,ballSeed.r,0,Math.PI*2);ctx.stroke();ctx.restore()}if(i===analysis.hitIndex){const w=f.landmarks?.[analysis.handedness==="left"?P.LW:P.RW];if(w){ctx.save();ctx.strokeStyle="#ef4444";ctx.lineWidth=4;ctx.beginPath();ctx.arc(w.x*ctx.canvas.width,w.y*ctx.canvas.height,24,0,Math.PI*2);ctx.stroke();ctx.restore()}}}
-function ballAt(t){if(!analysis?.ball?.length)return null;return analysis.ball.reduce((a,b)=>Math.abs(b.time-t)<Math.abs(a.time-t)?b:a)}
-function loop(){const v=el.sourceVideo,d=v.duration||0;el.timeDisplay.textContent=`${fmt(v.currentTime)} / ${fmt(d)} 秒`;if(d&&document.activeElement!==el.timeline)el.timeline.value=Math.round(v.currentTime/d*1000);el.playPauseButton.textContent=v.paused?"▶":"❚❚";render();raf=requestAnimationFrame(loop)}
-function renderResults(){const fr=analysis.frames,rate=100*fr.filter(f=>f.landmarks).length/fr.length,h=fr[analysis.hitIndex];el.detectionMetric.textContent=`${fmt(rate,0)}%`;el.elbowMetric.textContent=h?.m&&Number.isFinite(h.m.elbow)?`${fmt(h.m.elbow,1)}°`:"—";el.handSpeedMetric.textContent=h?.wristSpeed?fmt(h.wristSpeed,3):"—";el.hitTimeLabel.textContent=h?`打点候補：${fmt(h.time)}秒`:"打点候補：未検出";el.jumpHitButton.disabled=!h;el.setHitButton.disabled=false;el.selectBallButton.disabled=!h;el.autoBallButton.disabled=!h;el.exportCsvButton.disabled=false;el.exportImageButton.disabled=false;updateBallMetrics();makeChart();phases();const notes=[];if(h?.m)notes.push(`打点候補は${fmt(h.time)}秒、利き腕の肘角度は${fmt(h.m.elbow,1)}°です。`);if(h?.hands)notes.push("打点付近で利き手の21点を検出しました。手のひらと指の向きを確認できます。");notes.push("ボール追跡後は、手とボール中心のずれ・速度・表面模様からの推定回転数を追加します。");el.observationText.innerHTML=`<ul>${notes.map(x=>`<li>${x}</li>`).join("")}</ul>`}
-function updateBallMetrics(){const h=analysis?.frames?.[analysis.hitIndex],b=h?ballAt(h.time):null;if(b&&h?.hands){const palm=h.hands[9];el.contactOffsetMetric.textContent=fmt(Math.hypot(palm.x-b.x,palm.y-b.y)/(b.r/el.overlayCanvas.width),2)}else el.contactOffsetMetric.textContent="—";if(analysis?.ball?.length>1){const i=Math.max(1,analysis.ball.findIndex(x=>x.time>=(h?.time||0))),a=analysis.ball[i-1],c=analysis.ball[i],dt=c.time-a.time;el.ballSpeedMetric.textContent=dt>0?fmt(Math.hypot(c.x-a.x,c.y-a.y)/dt,3):"—"}else el.ballSpeedMetric.textContent="—";el.rpmMetric.textContent=Number.isFinite(analysis?.rpm)?`${fmt(analysis.rpm,0)} rpm`:"—";el.rpmConfidence.textContent=analysis?.rpmConfidence?`信頼度 ${Math.round(analysis.rpmConfidence*100)}%`:"ボール追跡後"}
-function makeChart(){chart?.destroy();el.chartEmpty.hidden=true;chart=new Chart(el.angleChart,{type:"line",data:{labels:analysis.frames.map(f=>fmt(f.time)),datasets:[{label:"肘角度",data:analysis.frames.map(f=>Number.isFinite(f.m?.elbow)?f.m.elbow:null),pointRadius:0,borderWidth:2},{label:"手首速度",data:analysis.frames.map(f=>f.wristSpeed||null),pointRadius:0,borderWidth:2,yAxisID:"y1"}]},options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{y:{title:{display:true,text:"角度（°）"}},y1:{position:"right",grid:{drawOnChartArea:false},title:{display:true,text:"速度（画面幅/秒）"}}},plugins:{legend:{position:"bottom"}}}})}
-function phases(){el.phaseButtons.innerHTML="";if(analysis.hitIndex<0)return;[["構え",0],["テイクバック",Math.max(0,analysis.hitIndex-Math.round(.45*analysis.sampleFps))],["打点",analysis.hitIndex],["フォロースルー",Math.min(analysis.frames.length-1,analysis.hitIndex+Math.round(.3*analysis.sampleFps))],["着地",Math.min(analysis.frames.length-1,analysis.hitIndex+Math.round(.7*analysis.sampleFps))]].forEach(([name,i])=>{const b=document.createElement("button");b.className="phase-button";b.textContent=`${name} ${fmt(analysis.frames[i].time)}秒`;b.onclick=()=>seek(analysis.frames[i].time);el.phaseButtons.appendChild(b)})}
-function canvasPoint(ev){const r=el.overlayCanvas.getBoundingClientRect();return{x:(ev.clientX-r.left)/r.width,y:(ev.clientY-r.top)/r.height}}
-function selectBall(){selectingBall=true;el.videoStage.classList.add("selecting-ball");setNotice("動画上のボール中心をクリックしてください。","success")}
-function setBall(ev){if(!selectingBall)return;const p=canvasPoint(ev),r=+el.ballRadius.value;ballSeed={time:el.sourceVideo.currentTime,x:p.x,y:p.y,r};selectingBall=false;el.videoStage.classList.remove("selecting-ball");el.trackBallButton.disabled=false;el.clearBallButton.disabled=false;setNotice("ボールを指定しました。「自動追跡・回転推定」を押してください。","success");render()}
-function framePixels(){work.width=el.sourceVideo.videoWidth;work.height=el.sourceVideo.videoHeight;wctx.drawImage(el.sourceVideo,0,0,work.width,work.height);return wctx.getImageData(0,0,work.width,work.height)}
-function sampleColor(img,cx,cy,r){let R=0,G=0,B=0,n=0;const x0=Math.max(0,Math.floor(cx-r*.55)),x1=Math.min(img.width-1,Math.ceil(cx+r*.55)),y0=Math.max(0,Math.floor(cy-r*.55)),y1=Math.min(img.height-1,Math.ceil(cy+r*.55));for(let y=y0;y<=y1;y+=3)for(let x=x0;x<=x1;x+=3)if((x-cx)**2+(y-cy)**2<(.55*r)**2){const k=4*(y*img.width+x);R+=img.data[k];G+=img.data[k+1];B+=img.data[k+2];n++}return[R/n,G/n,B/n]}
-function locate(img,prev,target,r){let best={x:prev.x,y:prev.y,s:Infinity};const pr=Math.max(18,r*3),step=Math.max(2,Math.round(r/7));for(let y=Math.max(r,prev.y-pr);y<Math.min(img.height-r,prev.y+pr);y+=step)for(let x=Math.max(r,prev.x-pr);x<Math.min(img.width-r,prev.x+pr);x+=step){const c=sampleColor(img,x,y,r),dc=Math.hypot(c[0]-target[0],c[1]-target[1],c[2]-target[2]),motion=.08*Math.hypot(x-prev.x,y-prev.y);const s=dc+motion;if(s<best.s)best={x,y,s}}return best}
-function ringSignature(img,cx,cy,r,n=36){const a=[];for(let i=0;i<n;i++){const th=2*Math.PI*i/n,x=Math.round(cx+.58*r*Math.cos(th)),y=Math.round(cy+.58*r*Math.sin(th)),k=4*(clamp(y,0,img.height-1)*img.width+clamp(x,0,img.width-1));a.push(.299*img.data[k]+.587*img.data[k+1]+.114*img.data[k+2])}const m=a.reduce((s,x)=>s+x,0)/n;return a.map(x=>x-m)}
-function shiftScore(a,b,sh){let e=0;for(let i=0;i<a.length;i++){const d=a[i]-b[(i+sh+a.length)%a.length];e+=d*d}return e/a.length}
+// Prevent the browser from navigating to a dropped local video anywhere on the page.
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(type => {
+  window.addEventListener(type, e => { e.preventDefault(); e.stopPropagation(); }, false);
+});
 
-function grayAt(img,x,y){x=Math.max(0,Math.min(img.width-1,Math.round(x)));y=Math.max(0,Math.min(img.height-1,Math.round(y)));const k=4*(y*img.width+x);return .299*img.data[k]+.587*img.data[k+1]+.114*img.data[k+2]}
-function ballCandidateScore(img,cx,cy,r,wrist){
-  let inner=0,outer=0,edge=0,variance=0,n=0,m=0,m2=0;
-  const samples=24;
-  for(let i=0;i<samples;i++){
-    const a=2*Math.PI*i/samples;
-    const gi=grayAt(img,cx+.55*r*Math.cos(a),cy+.55*r*Math.sin(a));
-    const go=grayAt(img,cx+1.15*r*Math.cos(a),cy+1.15*r*Math.sin(a));
-    inner+=gi;outer+=go;edge+=Math.abs(gi-go);m+=gi;m2+=gi*gi;n++;
-  }
-  m/=n;variance=Math.max(0,m2/n-m*m);
-  const distance=Math.hypot(cx-wrist.x,cy-wrist.y);
-  const prior=Math.max(0,1-distance/(r*5.5));
-  return edge/n*.55+Math.sqrt(variance)*.25+prior*38-Math.abs(inner/n-outer/n)*.05;
+els.drop.addEventListener('dragenter', () => els.drop.classList.add('dragover'));
+els.drop.addEventListener('dragover', () => els.drop.classList.add('dragover'));
+els.drop.addEventListener('dragleave', () => els.drop.classList.remove('dragover'));
+els.drop.addEventListener('drop', (e) => {
+  els.drop.classList.remove('dragover');
+  const file = [...(e.dataTransfer?.files || [])].find(f => f.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(f.name));
+  if (!file) return showLoadError('動画ファイルが見つかりませんでした。MP4を選んでください。');
+  loadVideoFile(file);
+});
+els.input.addEventListener('change', () => {
+  const file = els.input.files?.[0];
+  if (file) loadVideoFile(file);
+});
+
+function showLoadError(message) {
+  els.loadState.textContent = '読込エラー';
+  els.loadState.className = 'status';
+  els.fileInfo.textContent = message;
+  els.fileInfo.classList.remove('hidden');
 }
-async function autoDetectBall(){
-  if(!analysis||analysis.hitIndex<0)return;
-  el.autoBallButton.disabled=true;el.progressWrap.hidden=false;
-  try{
-    const hi=analysis.hitIndex,f=analysis.frames[hi],w=f?.hands?.[9]||f?.landmarks?.[analysis.handedness==="left"?P.LW:P.RW];
-    if(!w)throw Error("打点付近の手を検出できませんでした。手動指定を使ってください。");
-    await seek(f.time);const img=framePixels(),W=img.width,H=img.height;
-    const wx=w.x*W,wy=w.y*H,r=+el.ballRadius.value;
-    let best=null;const range=Math.max(70,r*5),step=Math.max(4,Math.round(r/4));
-    for(let y=Math.max(r,wy-range);y<Math.min(H-r,wy+range);y+=step){
-      for(let x=Math.max(r,wx-range);x<Math.min(W-r,wx+range);x+=step){
-        const d=Math.hypot(x-wx,y-wy);if(d<r*.4||d>range)continue;
-        const s=ballCandidateScore(img,x,y,r,{x:wx,y:wy});
-        if(!best||s>best.s)best={x,y,s};
-      }
+
+async function loadVideoFile(file) {
+  try {
+    resetAnalysis();
+    state.file = file;
+    els.loadState.textContent = '読込中';
+    els.loadState.className = 'status';
+    els.fileInfo.textContent = `${file.name}（${(file.size / 1024 / 1024).toFixed(1)} MB）を読み込んでいます…`;
+    els.fileInfo.classList.remove('hidden');
+
+    if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+    state.objectUrl = URL.createObjectURL(file);
+    els.video.pause();
+    els.video.removeAttribute('src');
+    els.video.load();
+    const metadataReady = waitForVideoMetadata(els.video, 12000);
+    els.video.src = state.objectUrl;
+    els.video.load();
+
+    await metadataReady;
+    if (!Number.isFinite(els.video.duration) || els.video.duration <= 0) throw new Error('動画の長さを取得できませんでした');
+
+    els.overlay.width = els.video.videoWidth;
+    els.overlay.height = els.video.videoHeight;
+    els.processor.width = els.video.videoWidth;
+    els.processor.height = els.video.videoHeight;
+    els.timeline.max = Math.max(1, Math.round(els.video.duration * 1000));
+    els.timeline.value = 0;
+    els.duration.textContent = `${els.video.duration.toFixed(3)}秒`;
+    els.fileInfo.textContent = `${file.name}｜${els.video.videoWidth}×${els.video.videoHeight}｜${els.video.duration.toFixed(2)}秒｜${(file.size / 1024 / 1024).toFixed(1)} MB`;
+    els.loadState.textContent = '読込完了';
+    els.loadState.className = 'status';
+    els.workspace.classList.remove('hidden');
+    els.marking.classList.remove('hidden');
+    els.video.currentTime = 0;
+    await once(els.video, 'loadeddata', 12000).catch(() => {});
+    updateTimeUI();
+    drawOverlay();
+    setStatus('動画を操作できます');
+    setTimeout(() => els.workspace.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+  } catch (err) {
+    console.error(err);
+    showLoadError(`動画を開けませんでした：${err.message}。MP4（H.264）へ変換すると安定します。`);
+  }
+}
+
+
+function waitForVideoMetadata(video, timeoutMs = 12000) {
+  if (video.readyState >= 1 && Number.isFinite(video.duration)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let timer;
+    const ok = () => { cleanup(); resolve(); };
+    const fail = () => { cleanup(); reject(new Error('動画形式をブラウザが読み込めませんでした')); };
+    const cleanup = () => {
+      clearTimeout(timer);
+      video.removeEventListener('loadedmetadata', ok);
+      video.removeEventListener('error', fail);
+    };
+    video.addEventListener('loadedmetadata', ok, { once: true });
+    video.addEventListener('error', fail, { once: true });
+    timer = setTimeout(() => { cleanup(); reject(new Error('動画情報の読み込みがタイムアウトしました')); }, timeoutMs);
+  });
+}
+
+function once(target, eventName, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    let timer;
+    const ok = (e) => { cleanup(); resolve(e); };
+    const fail = () => { cleanup(); reject(new Error(`${eventName}を待っている間にエラーが発生しました`)); };
+    const cleanup = () => {
+      target.removeEventListener(eventName, ok);
+      target.removeEventListener('error', fail);
+      clearTimeout(timer);
+    };
+    target.addEventListener(eventName, ok, { once: true });
+    target.addEventListener('error', fail, { once: true });
+    timer = setTimeout(() => { cleanup(); reject(new Error(`${eventName}がタイムアウトしました`)); }, timeoutMs);
+  });
+}
+
+function resetAnalysis() {
+  state.contactTime = null; state.activeMode = null; state.marks = {}; state.trajectory = []; state.trackingScores = []; state.result = null;
+  els.results.classList.add('hidden');
+  els.contactText.textContent = '接触フレーム：未設定';
+  els.autoTrack.disabled = true; els.calculate.disabled = true;
+  document.querySelectorAll('.mark-btn').forEach(b => b.classList.remove('active'));
+}
+
+els.video.addEventListener('timeupdate', () => { updateTimeUI(); drawOverlay(); });
+els.video.addEventListener('seeked', () => { updateTimeUI(); drawOverlay(); });
+els.video.addEventListener('play', animateOverlay);
+els.video.addEventListener('pause', () => { els.playBtn.textContent = '▶ 再生'; });
+els.video.addEventListener('ended', () => { els.playBtn.textContent = '▶ 再生'; });
+
+function animateOverlay() {
+  if (els.video.paused || els.video.ended) return;
+  updateTimeUI(); drawOverlay();
+  requestAnimationFrame(animateOverlay);
+}
+
+els.playBtn.addEventListener('click', async () => {
+  if (!els.video.src) return;
+  if (els.video.paused) {
+    try { await els.video.play(); els.playBtn.textContent = '⏸ 一時停止'; } catch (e) { showLoadError(`再生できません：${e.message}`); }
+  } else { els.video.pause(); }
+});
+els.prevBtn.addEventListener('click', () => stepFrame(-1));
+els.nextBtn.addEventListener('click', () => stepFrame(1));
+els.speed.addEventListener('change', () => { els.video.playbackRate = Number(els.speed.value); });
+els.timeline.addEventListener('input', () => {
+  if (!els.video.duration) return;
+  els.video.currentTime = clamp(Number(els.timeline.value) / 1000, 0, els.video.duration);
+});
+
+function stepFrame(dir) {
+  if (!els.video.src) return;
+  els.video.pause();
+  els.video.currentTime = clamp(els.video.currentTime + dir * frameDuration(), 0, els.video.duration);
+}
+
+function updateTimeUI() {
+  const t = els.video.currentTime || 0;
+  els.currentTime.textContent = `${t.toFixed(3)}秒`;
+  els.frameNo.textContent = `${Math.round(t * fps())}コマ`;
+  els.timeline.value = Math.round(t * 1000);
+}
+
+els.setContact.addEventListener('click', () => {
+  state.contactTime = els.video.currentTime;
+  els.video.pause();
+  els.contactText.textContent = `接触フレーム：${state.contactTime.toFixed(3)}秒（${Math.round(state.contactTime * fps())}コマ）`;
+  setStatus('接触フレームを設定しました');
+  drawOverlay();
+});
+
+document.querySelectorAll('.mark-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const mode = btn.dataset.mode;
+    if (mode === 'wristBefore' && state.contactTime != null) {
+      await seekTo(clamp(state.contactTime - frameDuration(), 0, els.video.duration));
+    } else if (state.contactTime != null) {
+      await seekTo(state.contactTime);
     }
-    if(!best)throw Error("ボール候補を見つけられませんでした。");
-    ballSeed={time:f.time,x:best.x/W,y:best.y/H,r,autoScore:best.s};
-    el.trackBallButton.disabled=false;el.clearBallButton.disabled=false;el.videoStage.classList.add("auto-candidate");
-    setNotice(`ボール候補を自動検出しました（候補スコア ${best.s.toFixed(1)}）。続けて追跡します。誤っていれば手動指定で直せます。`,"success");
-    render();await trackBall();
-  }catch(e){console.error(e);setNotice(e.message,"error")}finally{el.autoBallButton.disabled=false;el.progressWrap.hidden=true}
-}
-function arrow(g,x1,y1,x2,y2,color){g.strokeStyle=color;g.fillStyle=color;g.lineWidth=5;g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.stroke();const a=Math.atan2(y2-y1,x2-x1);g.beginPath();g.moveTo(x2,y2);g.lineTo(x2-14*Math.cos(a-.45),y2-14*Math.sin(a-.45));g.lineTo(x2-14*Math.cos(a+.45),y2-14*Math.sin(a+.45));g.closePath();g.fill()}
-async function renderContactStrip(){
-  const c=el.contactStripCanvas;if(!c||!analysis?.ball?.length||analysis.hitIndex<0)return;
-  const g=c.getContext("2d"),v=el.sourceVideo,hi=analysis.hitIndex,ids=[hi-2,hi-1,hi,hi+1,hi+2].map(i=>Math.max(0,Math.min(analysis.frames.length-1,i)));
-  g.clearRect(0,0,c.width,c.height);const panelW=c.width/5;
-  for(let j=0;j<ids.length;j++){
-    const i=ids[j],f=analysis.frames[i],b=ballAt(f.time),pc=palmCenter(f.hands)||f.landmarks?.[analysis.handedness==="left"?P.LW:P.RW];
-    await seek(f.time);
-    let cx=b?b.x*v.videoWidth:(pc?.x||.5)*v.videoWidth,cy=b?b.y*v.videoHeight:(pc?.y||.5)*v.videoHeight;
-    if(pc&&b){cx=(cx+pc.x*v.videoWidth)/2;cy=(cy+pc.y*v.videoHeight)/2}
-    const crop=Math.max(150,(b?.r||+el.ballRadius.value)*5.5),sx=Math.max(0,Math.min(v.videoWidth-crop,cx-crop/2)),sy=Math.max(0,Math.min(v.videoHeight-crop,cy-crop/2));
-    g.drawImage(v,sx,sy,crop,crop,j*panelW,0,panelW,c.height-42);
-    g.fillStyle="rgba(2,6,23,.82)";g.fillRect(j*panelW,c.height-42,panelW,42);g.fillStyle="#fff";g.font="700 18px sans-serif";g.textAlign="center";g.fillText(`${j-2>0?'+':''}${j-2}F  ${f.time.toFixed(3)}s`,j*panelW+panelW/2,c.height-15);
-    const tx=x=>j*panelW+(x*v.videoWidth-sx)/crop*panelW,ty=y=>(y*v.videoHeight-sy)/crop*(c.height-42);
-    if(b){g.strokeStyle=j===2?"#ef4444":"#facc15";g.lineWidth=j===2?6:4;g.beginPath();g.arc(tx(b.x),ty(b.y),Math.max(8,b.r/crop*panelW),0,Math.PI*2);g.stroke()}
-    if(pc){g.fillStyle="#fb923c";g.beginPath();g.arc(tx(pc.x),ty(pc.y),7,0,Math.PI*2);g.fill()}
-    const prev=analysis.frames[Math.max(0,i-1)],next=analysis.frames[Math.min(analysis.frames.length-1,i+1)],pp=palmCenter(prev.hands),pn=palmCenter(next.hands);
-    if(pp&&pn)arrow(g,tx(pp.x),ty(pp.y),tx(pn.x),ty(pn.y),"#fb923c");
-    const ba=ballAt(prev.time),bb=ballAt(next.time);if(ba&&bb)arrow(g,tx(ba.x),ty(ba.y),tx(bb.x),ty(bb.y),"#facc15");
-  }
-  await seek(analysis.frames[hi].time);
-}
-async function trackBall(){if(!ballSeed||!analysis)return;el.trackBallButton.disabled=true;el.progressWrap.hidden=false;try{const frames=analysis.frames,start=nearest(ballSeed.time),r=ballSeed.r,sx=ballSeed.x*el.sourceVideo.videoWidth,sy=ballSeed.y*el.sourceVideo.videoHeight;await seek(frames[start].time);let img=framePixels(),target=sampleColor(img,sx,sy,r),result=new Array(frames.length);result[start]={time:frames[start].time,x:ballSeed.x,y:ballSeed.y,r,score:0,sig:ringSignature(img,sx,sy,r)};for(const dir of [1,-1]){let prev={x:sx,y:sy};for(let i=start+dir;i>=0&&i<frames.length;i+=dir){if(cancel)break;await seek(frames[i].time);img=framePixels();const q=locate(img,prev,target,r);prev=q;result[i]={time:frames[i].time,x:q.x/img.width,y:q.y/img.height,r,score:q.s,sig:ringSignature(img,q.x,q.y,r)};progress(Math.abs(i-start),frames.length,`ボール追跡中 ${dir>0?"→":"←"}`);if(Math.abs(i-start)%5===0)await new Promise(r=>setTimeout(r,0))}}analysis.ball=result.filter(Boolean);estimateRpm();updateBallMetrics();render();computeContactTrajectory();updateBallMetrics();renderTrials();await renderContactStrip();el.refreshContactButton.disabled=false;setNotice("自動検出・ボール追跡・接触5コマ表示が完了しました。候補がずれていれば手動指定で修正してください。","success")}catch(e){console.error(e);setNotice(`ボール追跡に失敗しました：${e.message}`,"error")}finally{el.progressWrap.hidden=true;el.trackBallButton.disabled=false}}
-function estimateRpm(){const vals=[],conf=[],steps=[];let cumulative=0;for(let i=1;i<analysis.ball.length;i++){const a=analysis.ball[i-1],b=analysis.ball[i],dt=b.time-a.time;if(!a.sig||!b.sig||dt<=0){steps.push(null);continue}let bs=Infinity,bsh=0;for(let sh=-12;sh<=12;sh++){const s=shiftScore(a.sig,b.sig,sh);if(s<bs){bs=s;bsh=sh}}const deg=bsh*360/a.sig.length,rpm=Math.abs(deg/dt)/6,q=1/(1+bs/250);cumulative+=deg;steps.push({from:i-1,to:i,deg,cumulative,rpm,quality:q,shift:bsh,score:bs});if(rpm>20&&rpm<5000&&q>.08){vals.push(rpm);conf.push(q)}}analysis.rotationSteps=steps;if(vals.length){vals.sort((a,b)=>a-b);analysis.rpm=vals[Math.floor(vals.length/2)];analysis.rpmConfidence=conf.reduce((a,b)=>a+b,0)/conf.length}else{analysis.rpm=null;analysis.rpmConfidence=0}rotationIndex=Math.min(Math.max(1,analysis.ball.findIndex(b=>b.time>=(analysis.frames[analysis.hitIndex]?.time||0))),analysis.ball.length-1);enableRotationUI();renderRotationFrame()}
-function clearBall(){stopRotation();ballSeed=null;if(analysis){analysis.ball=[];analysis.rpm=null;analysis.rpmConfidence=0;analysis.rotationSteps=[];analysis.contact=null}el.trackBallButton.disabled=true;el.clearBallButton.disabled=true;updateBallMetrics();render()}
-function exportCsv(){if(!analysis)return;const head=["time_s","elbow_deg","wrist_speed","ball_x","ball_y","ball_r","hit","rpm_estimate","rpm_confidence"],rows=analysis.frames.map((f,i)=>{const b=ballAt(f.time);return[fmt(f.time,3),fmt(f.m?.elbow,2),fmt(f.wristSpeed,4),b?fmt(b.x,5):"",b?fmt(b.y,5):"",b?b.r:"",i===analysis.hitIndex?1:0,analysis.rpm??"",analysis.rpmConfidence??""]});const blob=new Blob(["\ufeff"+[head,...rows].map(r=>r.join(",")).join("\r\n")],{type:"text/csv"});download(blob,`volley-motion-v5-${Date.now()}.csv`)}
-function exportImage(){const c=document.createElement("canvas");c.width=el.sourceVideo.videoWidth;c.height=el.sourceVideo.videoHeight;const x=c.getContext("2d");x.drawImage(el.sourceVideo,0,0);render();x.drawImage(el.overlayCanvas,0,0,c.width,c.height);c.toBlob(b=>b&&download(b,"volley-motion-frame.png"))}
-function download(b,n){const u=URL.createObjectURL(b),a=document.createElement("a");a.href=u;a.download=n;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
-function yt(){try{const u=new URL(el.youtubeUrl.value),p=u.hostname==="youtu.be"?u.pathname.slice(1):u.searchParams.get("v")||u.pathname.split("/").filter(Boolean).pop();if(!p)throw 0;el.youtubeFrame.src=`https://www.youtube.com/embed/${p}?playsinline=1&rel=0`;el.youtubeFrame.hidden=false;el.youtubePlaceholder.hidden=true;el.youtubeFrameWrap.classList.remove("empty")}catch{setNotice("YouTube URLを確認してください。","error")}}
-function file(f){if(!f?.type.startsWith("video/")){setNotice("動画ファイルを選択してください。","error");return}if(url)URL.revokeObjectURL(url);url=URL.createObjectURL(f);el.sourceVideo.src=url;el.sourceVideo.load();el.dropZone.querySelector("strong").textContent=f.name;el.dropZone.querySelector("span").textContent=`${(f.size/1048576).toFixed(1)} MB`;analysis=null;clearBall();if(el.contactStripCanvas)el.contactStripCanvas.getContext("2d").clearRect(0,0,el.contactStripCanvas.width,el.contactStripCanvas.height)}
-function loaded(){const v=el.sourceVideo;el.clipStart.value=0;el.clipEnd.value=fmt(v.duration);el.overlayCanvas.width=v.videoWidth;el.overlayCanvas.height=v.videoHeight;[el.analyzeButton,el.playPauseButton,el.prevFrameButton,el.nextFrameButton,el.timeline,el.playbackRate].forEach(x=>x.disabled=false);el.videoStage.classList.remove("empty");el.selectBallButton.disabled=false;setNotice(`動画を読み込みました（${fmt(v.duration)}秒）。身体と手を解析してください。`,"success");if(!raf)loop()}
-
-
-function enableRotationUI(){const ok=!!analysis?.ball?.length;[el.rotationPrevButton,el.rotationPlayButton,el.rotationNextButton].forEach(b=>b.disabled=!ok)}
-function stopRotation(){if(rotationTimer){clearInterval(rotationTimer);rotationTimer=null}if(el.rotationPlayButton)el.rotationPlayButton.textContent="▶ 超スロー"}
-async function showRotationAt(i){if(!analysis?.ball?.length)return;rotationIndex=clamp(Math.round(i),0,analysis.ball.length-1);await seek(analysis.ball[rotationIndex].time);renderRotationFrame()}
-function drawPeakDots(g,sig,cx,cy,rad){if(!sig?.length)return;const max=Math.max(...sig),min=Math.min(...sig),span=Math.max(1,max-min);sig.forEach((v,i)=>{if(v<max-span*.22)return;const th=2*Math.PI*i/sig.length,x=cx+rad*Math.cos(th),y=cy+rad*Math.sin(th);g.beginPath();g.arc(x,y,2.7,0,Math.PI*2);g.fillStyle="rgba(255,255,255,.9)";g.fill()})}
-function renderRotationAxis(step){const c=el.rotationAxisCanvas,g=c.getContext("2d");g.clearRect(0,0,c.width,c.height);const cx=c.width/2,cy=c.height/2,r=66;g.strokeStyle="#94a3b8";g.lineWidth=3;g.beginPath();g.arc(cx,cy,r,0,Math.PI*2);g.stroke();g.fillStyle="#0f172a";g.font="700 14px sans-serif";g.textAlign="center";g.fillText("画面上の模様移動",cx,28);if(!step){g.fillStyle="#64748b";g.fillText("データなし",cx,cy+5);return}const dir=Math.sign(step.deg)||1,ang=dir>0?-.35*Math.PI:1.35*Math.PI;g.strokeStyle=step.quality>.35?"#dc2626":"#d97706";g.lineWidth=7;g.beginPath();g.arc(cx,cy,r,ang,ang+dir*1.2*Math.PI,dir<0);g.stroke();const end=ang+dir*1.2*Math.PI,ex=cx+r*Math.cos(end),ey=cy+r*Math.sin(end);g.fillStyle=g.strokeStyle;g.beginPath();g.moveTo(ex,ey);g.lineTo(ex-16*Math.cos(end-dir*.45),ey-16*Math.sin(end-dir*.45));g.lineTo(ex-16*Math.cos(end+dir*.45),ey-16*Math.sin(end+dir*.45));g.closePath();g.fill();g.fillStyle="#0f172a";g.font="800 18px sans-serif";g.fillText(step.deg>0?"時計回り候補":"反時計回り候補",cx,cy+6)}
-function renderRotationFrame(){const c=el.ballZoomCanvas;if(!c||!analysis?.ball?.length)return;const g=c.getContext("2d",{willReadFrequently:true}),b=analysis.ball[rotationIndex];if(!b)return;const scale=+el.zoomScale.value,srcR=Math.max(8,b.r*2.15),sx=b.x*el.sourceVideo.videoWidth-srcR,sy=b.y*el.sourceVideo.videoHeight-srcR,sw=srcR*2;g.clearRect(0,0,c.width,c.height);g.save();g.imageSmoothingEnabled=true;g.drawImage(el.sourceVideo,sx,sy,sw,sw,0,0,c.width,c.height);if(el.differenceToggle.checked&&rotationIndex>0){const prev=analysis.ball[rotationIndex-1],tmp=document.createElement("canvas");tmp.width=c.width;tmp.height=c.height;const tg=tmp.getContext("2d");const psx=prev.x*el.sourceVideo.videoWidth-srcR,psy=prev.y*el.sourceVideo.videoHeight-srcR;tg.drawImage(el.sourceVideo,psx,psy,sw,sw,0,0,c.width,c.height);const a=g.getImageData(0,0,c.width,c.height),d=tg.getImageData(0,0,c.width,c.height);for(let k=0;k<a.data.length;k+=4){a.data[k]=Math.min(255,Math.abs(a.data[k]-d.data[k])*3);a.data[k+1]=Math.min(255,Math.abs(a.data[k+1]-d.data[k+1])*3);a.data[k+2]=Math.min(255,Math.abs(a.data[k+2]-d.data[k+2])*3)}g.putImageData(a,0,0)}const cx=c.width/2,cy=c.height/2,rr=c.width/(2*2.15);g.strokeStyle="#facc15";g.lineWidth=5;g.beginPath();g.arc(cx,cy,rr,0,Math.PI*2);g.stroke();g.strokeStyle="#ef4444";g.lineWidth=4;g.beginPath();g.moveTo(cx,cy);g.lineTo(cx+rr*.88,cy);g.stroke();drawPeakDots(g,b.sig,cx,cy,rr*.58);g.restore();const step=analysis.rotationSteps?.[rotationIndex-1]||null;el.rotationFrameLabel.textContent=`${rotationIndex+1}/${analysis.ball.length}｜${fmt(b.time,3)}秒｜表示 ${scale}×`;el.frameAngleMetric.textContent=step?`${fmt(step.deg,1)}°/解析F`:'—';el.cumulativeAngleMetric.textContent=step?`${fmt(step.cumulative,1)}°`:'—';el.rotationDirectionMetric.textContent=step?(step.deg>0?'時計回り候補':step.deg<0?'反時計回り候補':'判定困難'):'—';el.trackingQualityMetric.textContent=step?`${Math.round(step.quality*100)}%`:'—';renderRotationAxis(step)}
-function toggleRotationPlay(){if(rotationTimer){stopRotation();return}el.rotationPlayButton.textContent="⏸ 停止";rotationTimer=setInterval(()=>{if(!analysis?.ball?.length){stopRotation();return}rotationIndex=(rotationIndex+1)%analysis.ball.length;showRotationAt(rotationIndex)},350)}
-
-
-
-function vecAngle(dx,dy){return Math.atan2(-dy,dx)*180/Math.PI}
-function palmCenter(h){if(!h)return null;const pts=[h[0],h[5],h[9],h[13],h[17]].filter(Boolean);return pts.length?{x:pts.reduce((a,p)=>a+p.x,0)/pts.length,y:pts.reduce((a,p)=>a+p.y,0)/pts.length}:null}
-function handFrameAround(index,dir){if(!analysis)return null;for(let i=index+dir;i>=0&&i<analysis.frames.length;i+=dir){if(analysis.frames[i]?.hands)return analysis.frames[i]}return null}
-function signedPct(v){return `${v>=0?"+":""}${fmt(v,1)}%`}
-function spinLevel(){const steps=(analysis?.rotationSteps||[]).filter(Boolean);if(!steps.length)return{label:"判定困難",score:0,dir:""};const good=steps.filter(x=>x.quality>.1);if(!good.length)return{label:"判定困難",score:0,dir:""};const vals=good.map(x=>Math.abs(x.deg)).sort((a,b)=>a-b),med=vals[Math.floor(vals.length/2)],q=good.reduce((a,x)=>a+x.quality,0)/good.length;let label=med<5?"弱":med<14?"中":"強";if(q<.13)label="判定困難";const sign=good.reduce((a,x)=>a+Math.sign(x.deg),0);return{label,score:med,dir:sign>1?"時計回り候補":sign<-1?"反時計回り候補":"方向不明",quality:q}}
-function computeContactTrajectory(){
-  if(!analysis?.ball?.length||analysis.hitIndex<0)return;
-  const hi=analysis.hitIndex,h=analysis.frames[hi],prev=handFrameAround(hi,-1),next=handFrameAround(hi,1),pc=palmCenter(h?.hands),pp=palmCenter(prev?.hands),pn=palmCenter(next?.hands);
-  const ball=ballAt(h.time),radNorm=ball?ball.r/el.overlayCanvas.width:NaN;
-  let approach=NaN,palm=NaN,ox=NaN,oy=NaN,pos="判定困難";
-  if(pp&&pn)approach=vecAngle(pn.x-pp.x,pn.y-pp.y);
-  if(h?.hands?.[5]&&h?.hands?.[17])palm=vecAngle(h.hands[17].x-h.hands[5].x,h.hands[17].y-h.hands[5].y);
-  if(pc&&ball&&radNorm>0){ox=(pc.x-ball.x)/radNorm*100;oy=(ball.y-pc.y)/radNorm*100;const vert=oy>22?"上":oy<-22?"下":"中央",hor=ox>22?"右":ox<-22?"左":"中央";pos=vert==="中央"?hor:hor==="中央"?vert:`${hor}${vert}`}
-  const after=analysis.ball.filter(b=>b.time>=h.time).slice(0,Math.min(12,analysis.ball.length));
-  let launch=NaN,lateral=NaN,drop=NaN;
-  if(after.length>=4){const a=after[0],b=after[Math.min(3,after.length-1)],z=after[after.length-1];launch=vecAngle(b.x-a.x,b.y-a.y);const dt=b.time-a.time,dtz=z.time-a.time;if(dt>0&&dtz>0){const vx=(b.x-a.x)/dt,vy=(b.y-a.y)/dt,px=a.x+vx*dtz,py=a.y+vy*dtz;lateral=(z.x-px)*100;drop=(z.y-py)*100}}
-  const spin=spinLevel();analysis.contact={approach,palm,offsetX:ox,offsetY:oy,position:pos,launch,lateral,drop,spin};
-  el.saveTrialButton.disabled=false;
-}
-function updateBallMetrics(){
-  const c=analysis?.contact,rate=analysis?.frames?.length?100*analysis.frames.filter(f=>f.landmarks).length/analysis.frames.length:NaN;
-  if(el.detectionMetric)el.detectionMetric.textContent=Number.isFinite(rate)?`${fmt(rate,0)}%`:"—";
-  if(el.handApproachMetric)el.handApproachMetric.textContent=Number.isFinite(c?.approach)?`${fmt(c.approach,1)}°`:"—";
-  if(el.palmAngleMetric)el.palmAngleMetric.textContent=Number.isFinite(c?.palm)?`${fmt(c.palm,1)}°`:"—";
-  if(el.contactPositionMetric)el.contactPositionMetric.textContent=c?.position||"—";
-  if(el.contactOffsetMetric)el.contactOffsetMetric.textContent=Number.isFinite(c?.offsetX)&&Number.isFinite(c?.offsetY)?`横 ${signedPct(c.offsetX)}／縦 ${signedPct(c.offsetY)}`:"ボール中心基準";
-  if(el.launchAngleMetric)el.launchAngleMetric.textContent=Number.isFinite(c?.launch)?`${fmt(c.launch,1)}°`:"—";
-  if(el.lateralChangeMetric)el.lateralChangeMetric.textContent=Number.isFinite(c?.lateral)?signedPct(c.lateral):"—";
-  if(el.dropChangeMetric)el.dropChangeMetric.textContent=Number.isFinite(c?.drop)?signedPct(c.drop):"—";
-  if(el.spinLevelMetric)el.spinLevelMetric.textContent=c?.spin?`${c.spin.label}${c.spin.dir?`・${c.spin.dir}`:""}`:"—";
-  if(el.rpmConfidence)el.rpmConfidence.textContent=c?.spin?.quality?`参考信頼度 ${Math.round(c.spin.quality*100)}%`:'30fps段階評価';
-}
-let trials=[];let scatter=null;
-try{trials=JSON.parse(localStorage.getItem("volleyMotionTrialsV5")||"[]")}catch{trials=[]}
-function saveTrial(){if(!analysis?.contact)return;const c=analysis.contact,name=el.trialName.value.trim()||`サーブ ${trials.length+1}`;trials.push({id:Date.now(),name,approach:c.approach,palm:c.palm,position:c.position,offsetX:c.offsetX,offsetY:c.offsetY,launch:c.launch,lateral:c.lateral,drop:c.drop,spin:c.spin?.label||"判定困難"});localStorage.setItem("volleyMotionTrialsV5",JSON.stringify(trials));el.trialName.value="";renderTrials();setNotice(`${name}を比較データに追加しました。`,"success")}
-function removeTrial(id){trials=trials.filter(x=>x.id!==id);localStorage.setItem("volleyMotionTrialsV5",JSON.stringify(trials));renderTrials()}
-function renderTrials(){if(!el.trialTableBody)return;if(!trials.length){el.trialTableBody.innerHTML='<tr><td colspan="8" class="muted">解析したサーブを追加すると比較できます。</td></tr>'}else el.trialTableBody.innerHTML=trials.map(t=>`<tr><td>${t.name}</td><td>${fmt(t.approach,1)}°</td><td>${t.position}</td><td>${fmt(t.launch,1)}°</td><td>${signedPct(t.lateral)}</td><td>${signedPct(t.drop)}</td><td>${t.spin}</td><td><button class="table-delete" data-id="${t.id}">削除</button></td></tr>`).join("");el.trialTableBody.querySelectorAll("[data-id]").forEach(b=>b.onclick=()=>removeTrial(+b.dataset.id));renderScatter()}
-function renderScatter(){if(!el.scatterChart)return;scatter?.destroy();const points=trials.filter(t=>Number.isFinite(t.approach)&&Number.isFinite(t.lateral)).map(t=>({x:t.approach,y:t.lateral,label:t.name}));el.scatterEmpty.hidden=points.length>=2;scatter=new Chart(el.scatterChart,{type:"scatter",data:{datasets:[{label:"サーブ",data:points,pointRadius:6}]},options:{responsive:true,plugins:{tooltip:{callbacks:{label:c=>`${c.raw.label}: 進入 ${fmt(c.raw.x,1)}° / 左右 ${signedPct(c.raw.y)}`}}},scales:{x:{title:{display:true,text:"手の進入角度（°）"}},y:{title:{display:true,text:"左右変化（画面幅%）"}}}}})}
-
-function acceptDroppedFile(e){
-  e.preventDefault();
-  e.stopPropagation();
-  el.dropZone.classList.remove("drag-over");
-  const f=e.dataTransfer?.files?.[0];
-  if(f){
-    if(el.selectedFileName)el.selectedFileName.textContent=f.name;
-    file(f);
-  }
-}
-el.dropZone.addEventListener("keydown",e=>{
-  if(e.key==="Enter"||e.key===" "){e.preventDefault();el.videoFile.click()}
+    state.activeMode = mode;
+    document.querySelectorAll('.mark-btn').forEach(b => b.classList.toggle('active', b === btn));
+    els.markHelp.textContent = `動画上の「${LABELS[mode]}」をクリックしてください。`;
+  });
 });
-el.videoFile.addEventListener("change",()=>{
-  const f=el.videoFile.files?.[0];
-  if(f){
-    if(el.selectedFileName)el.selectedFileName.textContent=f.name;
-    file(f);
+
+els.overlay.addEventListener('click', (e) => {
+  if (!state.activeMode || !els.video.videoWidth) return;
+  const rect = els.overlay.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * els.overlay.width / rect.width;
+  const y = (e.clientY - rect.top) * els.overlay.height / rect.height;
+  state.marks[state.activeMode] = { x, y, time: els.video.currentTime };
+  const done = state.activeMode;
+  state.activeMode = null;
+  document.querySelectorAll('.mark-btn').forEach(b => b.classList.remove('active'));
+  els.markHelp.textContent = `${LABELS[done]}を記録しました。必要な点を続けて指定してください。`;
+  els.autoTrack.disabled = !state.marks.ball;
+  updateCalculateEnabled();
+  drawOverlay();
+});
+
+els.clearMarks.addEventListener('click', () => {
+  state.marks = {}; state.trajectory = []; state.trackingScores = []; state.result = null;
+  els.autoTrack.disabled = true; els.calculate.disabled = true; els.results.classList.add('hidden');
+  els.markHelp.textContent = '点をリセットしました。ボール中心から指定してください。';
+  drawOverlay();
+});
+
+function updateCalculateEnabled() {
+  const required = ['ball', 'contact', 'wristBefore', 'wristContact', 'indexBase', 'pinkyBase'];
+  els.calculate.disabled = !required.every(k => state.marks[k]) || state.trajectory.length < 4;
+}
+
+function drawOverlay() {
+  ctx.clearRect(0, 0, els.overlay.width, els.overlay.height);
+  if (!els.overlay.width) return;
+
+  if (state.contactTime != null && Math.abs(els.video.currentTime - state.contactTime) < frameDuration() * 0.6) {
+    ctx.fillStyle = '#ff475733'; ctx.fillRect(0, 0, els.overlay.width, 7);
+    ctx.font = 'bold 20px sans-serif'; ctx.fillStyle = '#ff6b81'; ctx.fillText('接触フレーム', 16, 34);
+  }
+
+  for (const [key, p] of Object.entries(state.marks)) {
+    drawPoint(p, COLORS[key] || '#fff', LABELS[key] || key);
+  }
+  if (state.marks.ball) {
+    const r = Number(els.ballRadius.value) || 18;
+    ctx.beginPath(); ctx.arc(state.marks.ball.x, state.marks.ball.y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = '#ffe44d'; ctx.lineWidth = 3; ctx.stroke();
+  }
+  if (state.trajectory.length > 1) {
+    ctx.beginPath();
+    state.trajectory.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+    ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 4; ctx.stroke();
+    state.trajectory.forEach((p, i) => {
+      if (i % 2 !== 0) return;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fillStyle = '#00e5ff'; ctx.fill();
+    });
+  }
+  drawVectors();
+}
+
+function drawPoint(p, color, label) {
+  ctx.beginPath(); ctx.arc(p.x, p.y, 7, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = '#10233d'; ctx.stroke();
+  ctx.font = 'bold 15px sans-serif'; ctx.fillStyle = color; ctx.fillText(label, p.x + 10, p.y - 10);
+}
+
+function drawVectors() {
+  const m = state.marks;
+  if (m.wristBefore && m.wristContact) drawArrow(m.wristBefore, m.wristContact, '#2ed573', '手の進入');
+  if (m.indexBase && m.pinkyBase) {
+    ctx.beginPath(); ctx.moveTo(m.indexBase.x, m.indexBase.y); ctx.lineTo(m.pinkyBase.x, m.pinkyBase.y);
+    ctx.strokeStyle = '#a29bfe'; ctx.lineWidth = 4; ctx.stroke();
+  }
+  if (state.trajectory.length >= 3) drawArrow(state.trajectory[0], state.trajectory[Math.min(3, state.trajectory.length - 1)], '#00e5ff', '打ち出し');
+}
+
+function drawArrow(a, b, color, label) {
+  const ang = Math.atan2(b.y - a.y, b.x - a.x), head = 13;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+  ctx.lineTo(b.x - head * Math.cos(ang - Math.PI / 6), b.y - head * Math.sin(ang - Math.PI / 6));
+  ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - head * Math.cos(ang + Math.PI / 6), b.y - head * Math.sin(ang + Math.PI / 6));
+  ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.stroke();
+  ctx.font = 'bold 15px sans-serif'; ctx.fillStyle = color; ctx.fillText(label, (a.x + b.x) / 2 + 6, (a.y + b.y) / 2 - 7);
+}
+
+function seekTo(t) {
+  return new Promise((resolve, reject) => {
+    if (Math.abs(els.video.currentTime - t) < 0.0005) { resolve(); return; }
+    const timer = setTimeout(() => { cleanup(); reject(new Error('動画のコマ移動がタイムアウトしました')); }, 5000);
+    const done = () => { cleanup(); resolve(); };
+    const cleanup = () => { clearTimeout(timer); els.video.removeEventListener('seeked', done); };
+    els.video.addEventListener('seeked', done, { once: true });
+    els.video.currentTime = clamp(t, 0, els.video.duration);
+  });
+}
+
+els.autoTrack.addEventListener('click', async () => {
+  if (!state.marks.ball || state.loading) return;
+  state.loading = true;
+  els.autoTrack.disabled = true; els.calculate.disabled = true;
+  setStatus('ボールを追跡中…');
+  try {
+    els.video.pause();
+    const startTime = state.contactTime ?? state.marks.ball.time ?? els.video.currentTime;
+    const r = clamp(Number(els.ballRadius.value) || 18, 5, 80);
+    const n = clamp(Number(els.trackFrames.value) || 18, 4, 60);
+    await seekTo(startTime);
+    drawVideoToProcessor();
+    const template = extractTemplate(state.marks.ball.x, state.marks.ball.y, r);
+    if (!template) throw new Error('ボールが画面端に近すぎます');
+
+    const points = [{ x: state.marks.ball.x, y: state.marks.ball.y, time: startTime }];
+    const scores = [0];
+    let prev = points[0], velocity = { x: 0, y: 0 };
+
+    for (let i = 1; i < n; i++) {
+      const t = startTime + i * frameDuration();
+      if (t >= els.video.duration) break;
+      await seekTo(t);
+      drawVideoToProcessor();
+      const pred = { x: prev.x + velocity.x, y: prev.y + velocity.y };
+      const found = findBestMatch(template, pred.x, pred.y, r, i < 2 ? 105 : 80);
+      if (!found || found.score > 95) break;
+      const p = { x: found.x, y: found.y, time: t };
+      if (points.length > 1) {
+        const last = points[points.length - 1];
+        velocity = { x: 0.65 * velocity.x + 0.35 * (p.x - last.x), y: 0.65 * velocity.y + 0.35 * (p.y - last.y) };
+      } else velocity = { x: p.x - prev.x, y: p.y - prev.y };
+      points.push(p); scores.push(found.score); prev = p;
+    }
+
+    state.trajectory = points;
+    state.trackingScores = scores;
+    await seekTo(startTime);
+    setStatus(`${points.length}コマ追跡しました`);
+    els.markHelp.textContent = `${points.length}コマを自動追跡しました。水色の軌跡を確認し、問題なければ結果を計算してください。`;
+    updateCalculateEnabled();
+    drawOverlay();
+  } catch (err) {
+    console.error(err);
+    setStatus('追跡に失敗', 'muted');
+    els.markHelp.textContent = `自動追跡できませんでした：${err.message}。ボール半径を調整して再実行してください。`;
+  } finally {
+    state.loading = false;
+    els.autoTrack.disabled = !state.marks.ball;
   }
 });
-["dragenter","dragover"].forEach(type=>el.dropZone.addEventListener(type,e=>{e.preventDefault();e.stopPropagation();el.dropZone.classList.add("drag-over")}));
-el.dropZone.addEventListener("dragleave",e=>{e.preventDefault();e.stopPropagation();el.dropZone.classList.remove("drag-over")});
-el.dropZone.addEventListener("drop",acceptDroppedFile);
-["dragenter","dragover","drop"].forEach(type=>document.addEventListener(type,e=>{if(!el.dropZone.contains(e.target))e.preventDefault()},{passive:false}));
-el.sourceVideo.onloadedmetadata=loaded;el.analyzeButton.onclick=analyze;el.cancelButton.onclick=()=>cancel=true;el.playPauseButton.onclick=()=>el.sourceVideo.paused?el.sourceVideo.play():el.sourceVideo.pause();el.prevFrameButton.onclick=()=>seek(el.sourceVideo.currentTime-1/60);el.nextFrameButton.onclick=()=>seek(el.sourceVideo.currentTime+1/60);el.timeline.oninput=()=>el.sourceVideo.currentTime=+el.timeline.value/1000*el.sourceVideo.duration;el.playbackRate.onchange=()=>el.sourceVideo.playbackRate=+el.playbackRate.value;el.jumpHitButton.onclick=()=>analysis?.hitIndex>=0&&seek(analysis.frames[analysis.hitIndex].time);el.setHitButton.onclick=()=>{if(!analysis)return;analysis.hitIndex=nearest(el.sourceVideo.currentTime);renderResults()};el.ballRadius.oninput=()=>el.ballRadiusLabel.textContent=`${el.ballRadius.value}px`;el.autoBallButton.onclick=autoDetectBall;el.selectBallButton.onclick=selectBall;el.overlayCanvas.onclick=setBall;el.trackBallButton.onclick=trackBall;el.clearBallButton.onclick=clearBall;el.loadYoutubeButton.onclick=yt;el.exportCsvButton.onclick=exportCsv;el.exportImageButton.onclick=exportImage;el.saveTrialButton.onclick=saveTrial;el.clearTrialsButton.onclick=()=>{trials=[];localStorage.removeItem("volleyMotionTrialsV5");renderTrials()};el.refreshContactButton.onclick=renderContactStrip;el.rotationPrevButton.onclick=()=>showRotationAt(rotationIndex-1);el.rotationNextButton.onclick=()=>showRotationAt(rotationIndex+1);el.rotationPlayButton.onclick=toggleRotationPlay;el.zoomScale.oninput=()=>{el.zoomScaleLabel.textContent=`${el.zoomScale.value}×`;renderRotationFrame()};el.differenceToggle.onchange=renderRotationFrame;[el.skeletonToggle,el.handToggle,el.ballToggle].forEach(x=>x.onchange=render);renderTrials();window.onbeforeunload=()=>{pose?.close();hand?.close();if(url)URL.revokeObjectURL(url)};
 
+function drawVideoToProcessor() {
+  pctx.drawImage(els.video, 0, 0, els.processor.width, els.processor.height);
+}
+
+function extractTemplate(cx, cy, r) {
+  const x = Math.round(cx - r), y = Math.round(cy - r), s = r * 2 + 1;
+  if (x < 0 || y < 0 || x + s >= els.processor.width || y + s >= els.processor.height) return null;
+  const data = pctx.getImageData(x, y, s, s);
+  return { data, r, s };
+}
+
+function findBestMatch(template, cx, cy, r, searchRadius) {
+  const W = els.processor.width, H = els.processor.height;
+  const x0 = Math.max(r, Math.round(cx - searchRadius));
+  const x1 = Math.min(W - r - 1, Math.round(cx + searchRadius));
+  const y0 = Math.max(r, Math.round(cy - searchRadius));
+  const y1 = Math.min(H - r - 1, Math.round(cy + searchRadius));
+  if (x1 <= x0 || y1 <= y0) return null;
+
+  const region = pctx.getImageData(x0 - r, y0 - r, (x1 - x0) + 2 * r + 1, (y1 - y0) + 2 * r + 1);
+  const rd = region.data, rw = region.width, td = template.data.data, s = template.s;
+  let best = null;
+  const candidateStep = 3;
+  const sampleStep = Math.max(2, Math.round(r / 6));
+
+  for (let y = y0; y <= y1; y += candidateStep) {
+    for (let x = x0; x <= x1; x += candidateStep) {
+      let sum = 0, count = 0;
+      for (let py = -r; py <= r; py += sampleStep) {
+        for (let px = -r; px <= r; px += sampleStep) {
+          if (px * px + py * py > r * r) continue;
+          const ti = ((py + r) * s + (px + r)) * 4;
+          const ri = ((y + py - (y0 - r)) * rw + (x + px - (x0 - r))) * 4;
+          const dr = td[ti] - rd[ri], dg = td[ti + 1] - rd[ri + 1], db = td[ti + 2] - rd[ri + 2];
+          sum += Math.sqrt(dr * dr + dg * dg + db * db) / 4.42;
+          count++;
+        }
+      }
+      const score = sum / Math.max(1, count);
+      const distancePenalty = Math.hypot(x - cx, y - cy) * 0.06;
+      const total = score + distancePenalty;
+      if (!best || total < best.total) best = { x, y, score, total };
+    }
+  }
+  return best;
+}
+
+els.calculate.addEventListener('click', calculateResults);
+function calculateResults() {
+  try {
+    const m = state.marks;
+    const handApproach = angleBetween(m.wristBefore, m.wristContact);
+    const palmAngle = angleBetween(m.indexBase, m.pinkyBase);
+    const r = Number(els.ballRadius.value) || 18;
+    const offsetX = (m.contact.x - m.ball.x) / r * 100;
+    const offsetY = (m.ball.y - m.contact.y) / r * 100;
+    const contactLabel = classifyContact(offsetX, offsetY);
+
+    const tr = state.trajectory;
+    const firstN = tr.slice(0, Math.min(5, tr.length));
+    const fx = linearRegression(firstN.map(p => [p.time, p.x]));
+    const fy = linearRegression(firstN.map(p => [p.time, p.y]));
+    const launchAngle = deg(Math.atan2(-fy.slope, fx.slope));
+    const last = tr[tr.length - 1];
+    const predX = fx.intercept + fx.slope * last.time;
+    const predY = fy.intercept + fy.slope * last.time;
+    const lateralPct = (last.x - predX) / els.video.videoWidth * 100;
+    const dropPct = (last.y - predY) / els.video.videoHeight * 100;
+    const speedPx = Math.hypot(fx.slope, fy.slope);
+    const avgScore = state.trackingScores.length > 1 ? state.trackingScores.slice(1).reduce((a,b)=>a+b,0)/(state.trackingScores.length-1) : 999;
+    const quality = tr.length >= 12 && avgScore < 45 ? '高' : tr.length >= 7 && avgScore < 75 ? '中' : '低';
+
+    state.result = { handApproach, palmAngle, offsetX, offsetY, contactLabel, launchAngle, lateralPct, dropPct, speedPx, quality, frames: tr.length };
+    renderMetrics(state.result);
+    drawContactDiagram(state.result);
+    drawTrajectoryChart(state.result);
+    els.quality.textContent = `追跡信頼度：${quality}`;
+    els.results.classList.remove('hidden');
+    els.results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (err) {
+    console.error(err);
+    els.markHelp.textContent = `計算できませんでした：${err.message}`;
+  }
+}
+
+function linearRegression(points) {
+  const n = points.length;
+  const sx = points.reduce((a,p)=>a+p[0],0), sy = points.reduce((a,p)=>a+p[1],0);
+  const sxx = points.reduce((a,p)=>a+p[0]*p[0],0), sxy = points.reduce((a,p)=>a+p[0]*p[1],0);
+  const den = n*sxx - sx*sx;
+  const slope = Math.abs(den) < 1e-9 ? 0 : (n*sxy - sx*sy)/den;
+  return { slope, intercept: (sy - slope*sx)/n };
+}
+
+function classifyContact(x, y) {
+  const h = x < -18 ? '左' : x > 18 ? '右' : '中央';
+  const v = y > 18 ? '上' : y < -18 ? '下' : '中央';
+  return h === '中央' && v === '中央' ? '中央' : `${h}${v === '中央' ? '' : v}`;
+}
+
+function renderMetrics(r) {
+  const items = [
+    ['手の進入角', formatAngle(r.handApproach)], ['手のひら角', formatAngle(r.palmAngle)],
+    ['接触位置', r.contactLabel], ['打ち出し角', formatAngle(r.launchAngle)],
+    ['左右変化', `${r.lateralPct >= 0 ? '右へ ' : '左へ '}${Math.abs(round(r.lateralPct,2))}%`],
+    ['落下傾向', `${r.dropPct >= 0 ? '下へ ' : '上へ '}${Math.abs(round(r.dropPct,2))}%`],
+    ['初期速度', `${round(r.speedPx)} px/s`], ['追跡コマ数', `${r.frames}コマ`]
+  ];
+  els.metrics.innerHTML = items.map(([k,v]) => `<div class="metric"><span>${k}</span><strong>${v}</strong></div>`).join('');
+}
+
+function drawContactDiagram(r) {
+  const c = els.contactDiagram, g = c.getContext('2d');
+  g.clearRect(0,0,c.width,c.height); g.fillStyle='#fbfdff'; g.fillRect(0,0,c.width,c.height);
+  const cx=240, cy=160, R=95;
+  g.beginPath(); g.arc(cx,cy,R,0,Math.PI*2); g.fillStyle='#ffe44d'; g.fill(); g.strokeStyle='#10233d'; g.lineWidth=3; g.stroke();
+  g.beginPath(); g.moveTo(cx-R,cy); g.lineTo(cx+R,cy); g.moveTo(cx,cy-R); g.lineTo(cx,cy+R); g.strokeStyle='#10233d44'; g.lineWidth=1; g.stroke();
+  const px=cx+clamp(r.offsetX/100,-1.2,1.2)*R, py=cy-clamp(r.offsetY/100,-1.2,1.2)*R;
+  g.beginPath(); g.arc(px,py,10,0,Math.PI*2); g.fillStyle='#ff4757'; g.fill(); g.strokeStyle='#fff'; g.lineWidth=3; g.stroke();
+  g.font='bold 18px sans-serif'; g.fillStyle='#10233d'; g.fillText(`接触：${r.contactLabel}`,20,30);
+  g.font='15px sans-serif'; g.fillText(`横 ${round(r.offsetX)}% / 縦 ${round(r.offsetY)}%`,20,55);
+}
+
+function drawTrajectoryChart() {
+  const c=els.trajectoryChart,g=c.getContext('2d'),pts=state.trajectory;
+  g.clearRect(0,0,c.width,c.height); g.fillStyle='#fbfdff'; g.fillRect(0,0,c.width,c.height);
+  if(pts.length<2)return;
+  const minX=Math.min(...pts.map(p=>p.x)),maxX=Math.max(...pts.map(p=>p.x));
+  const minY=Math.min(...pts.map(p=>p.y)),maxY=Math.max(...pts.map(p=>p.y));
+  const pad=40, sx=(c.width-pad*2)/Math.max(1,maxX-minX), sy=(c.height-pad*2)/Math.max(1,maxY-minY), scale=Math.min(sx,sy);
+  const map=p=>({x:pad+(p.x-minX)*scale,y:pad+(p.y-minY)*scale});
+  g.beginPath();pts.forEach((p,i)=>{const q=map(p);i?g.lineTo(q.x,q.y):g.moveTo(q.x,q.y)});g.strokeStyle='#2463eb';g.lineWidth=4;g.stroke();
+  pts.forEach((p,i)=>{const q=map(p);g.beginPath();g.arc(q.x,q.y,i===0?7:4,0,Math.PI*2);g.fillStyle=i===0?'#ff4757':'#00a8c6';g.fill()});
+  g.font='14px sans-serif';g.fillStyle='#10233d';g.fillText('赤：接触直後　青：追跡軌道',18,24);
+}
+
+els.saveServe.addEventListener('click', () => {
+  if (!state.result) return;
+  const list = getComparison();
+  list.push({ ...state.result, savedAt: new Date().toISOString() });
+  localStorage.setItem('volleyMotionComparisonV1', JSON.stringify(list));
+  renderComparison();
+  els.compare.classList.remove('hidden');
+  els.compare.scrollIntoView({ behavior:'smooth', block:'start' });
+});
+els.clearCompare.addEventListener('click', () => { localStorage.removeItem('volleyMotionComparisonV1'); renderComparison(); });
+function getComparison(){try{return JSON.parse(localStorage.getItem('volleyMotionComparisonV1')||'[]')}catch{return[]}}
+function renderComparison(){
+  const list=getComparison(); els.compare.classList.toggle('hidden',list.length===0);
+  els.compareBody.innerHTML=list.map((r,i)=>`<tr><td>${i+1}</td><td>${round(r.handApproach)}°</td><td>${round(r.palmAngle)}°</td><td>${r.contactLabel}</td><td>${round(r.launchAngle)}°</td><td>${r.lateralPct>=0?'右':'左'} ${Math.abs(round(r.lateralPct,2))}%</td><td>${r.dropPct>=0?'下':'上'} ${Math.abs(round(r.dropPct,2))}%</td></tr>`).join('');
+}
+
+els.csv.addEventListener('click', () => {
+  if (!state.result) return;
+  const r=state.result;
+  const rows=[['項目','値'],['手の進入角',r.handApproach],['手のひら角',r.palmAngle],['接触位置',r.contactLabel],['接触横ずれ%',r.offsetX],['接触縦ずれ%',r.offsetY],['打ち出し角',r.launchAngle],['左右変化%',r.lateralPct],['落下傾向%',r.dropPct],['初期速度px/s',r.speedPx],['追跡信頼度',r.quality],[],['time_s','x_px','y_px'],...state.trajectory.map(p=>[p.time,p.x,p.y])];
+  const csv='\uFEFF'+rows.map(row=>row.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(',')).join('\r\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=`volley_motion_${Date.now()}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+});
+
+renderComparison();
+window.addEventListener('beforeunload',()=>{if(state.objectUrl)URL.revokeObjectURL(state.objectUrl)});
