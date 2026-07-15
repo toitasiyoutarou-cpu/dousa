@@ -4,14 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#10233f" />
-  <title>VolleyMotion Lab v2｜ジャンプサーブ解析</title>
+  <title>VolleyMotion Lab v5｜30fps サーブ自動接触・軌道解析</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <link rel="preconnect" href="https://storage.googleapis.com" crossorigin />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
 <header class="app-header">
-  <div><p class="eyebrow">BODY × HAND × BALL</p><h1>VolleyMotion Lab v2</h1><p class="subtitle">ジャンプサーブの身体・手・ボール回転を一体解析</p></div>
+  <div><p class="eyebrow">HAND × CONTACT × TRAJECTORY</p><h1>VolleyMotion Lab v5</h1><p class="subtitle">30fps動画から、選手・打点・ボール候補を自動検出して比較</p></div>
   <div class="privacy-badge"><span>🔒</span><span>端末内解析</span></div>
 </header>
 <main class="app-shell">
@@ -20,7 +20,7 @@
   <div id="dropZone" class="drop-zone" tabindex="0" role="button">
     <input id="videoFile" type="file" accept="video/*,.mp4,.mov,.m4v,.webm" hidden />
     <div class="drop-icon">🎥</div><strong>動画をここへドロップ</strong><span>またはクリックして選択</span>
-    <small>60fps以上推奨。回転解析は120〜240fps、ボール表面が見える映像ほど精度が上がります。</small>
+    <small>30fps対応。回転数ではなく、接触条件・打ち出し方向・左右変化・落下傾向を中心に分析します。</small>
   </div>
   <div class="settings-grid">
     <label>利き腕<select id="handedness"><option value="left" selected>左利き（宮浦選手）</option><option value="right">右利き</option></select></label>
@@ -30,9 +30,9 @@
     <label>解析開始（秒）<input id="clipStart" type="number" min="0" step="0.05" value="0" /></label>
     <label>解析終了（秒）<input id="clipEnd" type="number" min="0" step="0.05" value="0" /></label>
   </div>
-  <div class="primary-actions"><button id="analyzeButton" class="button primary" disabled>✨ 身体と手を自動解析</button><button id="cancelButton" class="button ghost" hidden>中止</button></div>
+  <div class="primary-actions"><button id="analyzeButton" class="button primary" disabled>✨ 手・接触・軌道解析を開始</button><button id="cancelButton" class="button ghost" hidden>中止</button></div>
   <div id="progressWrap" class="progress-wrap" hidden><div class="progress-row"><span id="progressText">準備中</span><span id="progressPercent">0%</span></div><progress id="analysisProgress" max="100" value="0"></progress></div>
-  <div id="notice" class="notice">動画を選択してください。身体33点と打点付近の手21点を自動検出します。</div>
+  <div id="notice" class="notice">動画を選択してください。打点候補と手21点を検出し、ボール指定後に接触条件と軌道を分析します。</div>
 </section>
 
 <section class="workspace">
@@ -44,8 +44,9 @@
   <div class="ball-controls">
     <div><strong>ボール追跡</strong><small>打点付近で「ボールを指定」を押し、動画上のボール中心をクリック</small></div>
     <label>半径<input id="ballRadius" type="range" min="8" max="70" value="24"><span id="ballRadiusLabel">24px</span></label>
-    <button id="selectBallButton" class="button small secondary" disabled>① ボールを指定</button>
-    <button id="trackBallButton" class="button small" disabled>② 自動追跡・回転推定</button>
+    <button id="autoBallButton" class="button small primary" disabled>🤖 ボール候補を自動検出</button>
+    <button id="selectBallButton" class="button small secondary" disabled>手動でボールを指定</button>
+    <button id="trackBallButton" class="button small" disabled>追跡・軌道分析</button>
     <button id="clearBallButton" class="button small ghost" disabled>解除</button>
   </div>
 </section>
@@ -57,23 +58,70 @@
 </aside>
 </section>
 
+
+<section class="panel contact-visual-panel">
+  <div class="panel-heading"><div><p class="step-label">CONTACT VIEW</p><h2>接触前後5コマ・自動拡大</h2></div><button id="refreshContactButton" class="button small secondary" disabled>再描画</button></div>
+  <canvas id="contactStripCanvas" width="1400" height="330"></canvas>
+  <div class="contact-legend"><span>橙：手の進入方向</span><span>黄：ボール軌道</span><span>赤：接触候補</span></div>
+  <p class="fine-print">30fpsでは接触瞬間がフレーム間に入ることがあります。赤枠の前後を見比べ、必要なら「現在位置を打点に設定」で補正してください。</p>
+</section>
+
 <section class="panel results-panel">
   <div class="panel-heading"><div><p class="step-label">STEP 3</p><h2>解析結果</h2></div><div class="result-actions"><button id="exportCsvButton" class="button small" disabled>CSV保存</button><button id="exportImageButton" class="button small" disabled>画像保存</button></div></div>
-  <div class="metric-grid">
-    <article class="metric-card"><span>打点時の肘角度</span><strong id="elbowMetric">—</strong><small>利き腕側</small></article>
-    <article class="metric-card"><span>手首速度</span><strong id="handSpeedMetric">—</strong><small>画面幅/秒</small></article>
-    <article class="metric-card"><span>手とボール中心のずれ</span><strong id="contactOffsetMetric">—</strong><small>ボール半径比</small></article>
-    <article class="metric-card"><span>ボール速度</span><strong id="ballSpeedMetric">—</strong><small>画面幅/秒</small></article>
-    <article class="metric-card accent"><span>推定回転数</span><strong id="rpmMetric">—</strong><small id="rpmConfidence">ボール追跡後</small></article>
-    <article class="metric-card"><span>骨格検出率</span><strong id="detectionMetric">—</strong><small>解析フレーム中</small></article>
+  <div class="metric-grid contact-metrics">
+    <article class="metric-card accent"><span>手の進入角度</span><strong id="handApproachMetric">—</strong><small>画面水平基準</small></article>
+    <article class="metric-card"><span>手のひら角度</span><strong id="palmAngleMetric">—</strong><small>人差し指側―小指側</small></article>
+    <article class="metric-card"><span>推定接触位置</span><strong id="contactPositionMetric">—</strong><small id="contactOffsetMetric">ボール中心基準</small></article>
+    <article class="metric-card accent"><span>打ち出し角度</span><strong id="launchAngleMetric">—</strong><small>接触直後</small></article>
+    <article class="metric-card"><span>左右変化</span><strong id="lateralChangeMetric">—</strong><small>画面幅比</small></article>
+    <article class="metric-card"><span>落下傾向</span><strong id="dropChangeMetric">—</strong><small>初期直線からのずれ</small></article>
+    <article class="metric-card"><span>回転の強弱</span><strong id="spinLevelMetric">—</strong><small id="rpmConfidence">30fps段階評価</small></article>
+    <article class="metric-card"><span>解析品質</span><strong id="detectionMetric">—</strong><small>骨格・手・ボール</small></article>
+    <span id="elbowMetric" hidden></span><span id="handSpeedMetric" hidden></span><span id="ballSpeedMetric" hidden></span><span id="rpmMetric" hidden></span>
   </div>
   <div class="result-layout"><div class="chart-card"><div class="chart-heading"><h3>動作の時間変化</h3><span class="legend-note">破線＝打点候補</span></div><canvas id="angleChart"></canvas><div id="chartEmpty" class="chart-empty">解析後に表示されます。</div></div>
   <div class="observation-card"><h3>自動観察メモ</h3><div id="observationText" class="observation-text">解析後に表示します。</div><div class="caution-box"><strong>回転数について</strong><p>表面模様の角度変化から求める試験的推定です。低fps・ブレ・無地に近いボールでは誤差が大きくなります。値と信頼度をセットで扱ってください。</p></div></div></div>
   <div class="phase-section"><h3>動作局面</h3><div id="phaseButtons" class="phase-buttons"><span class="muted">解析後に表示されます。</span></div></div>
 </section>
-<section class="panel guide-panel"><h2>宮浦選手型の分析ポイント</h2><div class="guide-grid"><div><strong>1</strong><span>左肩・骨盤の回転差と解放タイミング</span></div><div><strong>2</strong><span>左肘の伸展、手首速度、打点位置</span></div><div><strong>3</strong><span>回転数・回転方向・打球軌道の関係</span></div></div></section>
+
+<section class="panel rotation-panel">
+  <div class="panel-heading">
+    <div><p class="step-label">STEP 4</p><h2>接触前後・ボール変化の確認</h2></div>
+    <div class="rotation-actions">
+      <button id="rotationPrevButton" class="button small" disabled>−1解析F</button>
+      <button id="rotationPlayButton" class="button small secondary" disabled>▶ 超スロー</button>
+      <button id="rotationNextButton" class="button small" disabled>+1解析F</button>
+    </div>
+  </div>
+  <div class="rotation-layout">
+    <div class="zoom-card">
+      <div class="zoom-heading"><strong>ボール拡大</strong><span id="rotationFrameLabel">ボール追跡後に表示</span></div>
+      <canvas id="ballZoomCanvas" width="520" height="520"></canvas>
+      <div class="zoom-controls">
+        <label>拡大率<input id="zoomScale" type="range" min="4" max="16" value="10"><span id="zoomScaleLabel">10×</span></label>
+        <label class="switch-label"><input id="differenceToggle" type="checkbox"><span>前フレームとの差分</span></label>
+      </div>
+    </div>
+    <div class="rotation-readout">
+      <article><span>表面模様の変化量</span><strong id="frameAngleMetric">—</strong></article>
+      <article><span>模様変化の累積</span><strong id="cumulativeAngleMetric">—</strong></article>
+      <article><span>回転方向の候補</span><strong id="rotationDirectionMetric">—</strong></article>
+      <article><span>判定信頼度</span><strong id="trackingQualityMetric">—</strong></article>
+      <div class="axis-visual"><canvas id="rotationAxisCanvas" width="360" height="220"></canvas><small>矢印は画面上で観測された模様の移動方向です。3次元の回転軸そのものではありません。</small></div>
+    </div>
+  </div>
+  <div class="rotation-note"><strong>見方：</strong>30fpsでは正確なrpmは出しません。表面模様の変化を「弱・中・強」の参考値として扱い、主に接触位置とその後の軌道を比較します。</div>
+</section>
+
+<section class="panel comparison-panel">
+  <div class="panel-heading"><div><p class="step-label">STEP 5</p><h2>複数サーブ比較</h2></div><button id="saveTrialButton" class="button primary" disabled>このサーブを比較に追加</button></div>
+  <div class="trial-form"><label>サーブ名<input id="trialName" type="text" placeholder="例：宮浦選手 1本目"></label><button id="clearTrialsButton" class="button ghost">比較データを全削除</button></div>
+  <div class="comparison-layout"><div class="comparison-table-wrap"><table class="comparison-table"><thead><tr><th>サーブ</th><th>進入角</th><th>接触位置</th><th>打出角</th><th>左右変化</th><th>落下</th><th>回転傾向</th><th></th></tr></thead><tbody id="trialTableBody"><tr><td colspan="8" class="muted">解析したサーブを追加すると比較できます。</td></tr></tbody></table></div><div class="scatter-card"><h3>手の進入角度 × 左右変化</h3><canvas id="scatterChart"></canvas><div id="scatterEmpty" class="chart-empty">2本以上追加すると傾向を確認できます。</div></div></div>
+</section>
+
+<section class="panel guide-panel"><h2>30fpsで見る研究ポイント</h2><div class="guide-grid"><div><strong>1</strong><span>手がボールへ入る方向と手のひらの向き</span></div><div><strong>2</strong><span>ボール中心に対して上下左右のどこへ当たったか</span></div><div><strong>3</strong><span>接触条件と打ち出し角・左右変化・落下傾向の関係</span></div></div></section>
 </main>
-<footer><p>VolleyMotion Lab v2 — 教育・探究用プロトタイプ</p></footer>
+<footer><p>VolleyMotion Lab v5 — 30fps自動接触・軌道解析プロトタイプ</p></footer>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js" crossorigin="anonymous"></script>
 <script type="module" src="./app.js"></script>
 </body></html>
