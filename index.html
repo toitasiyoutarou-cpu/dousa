@@ -1,158 +1,137 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="theme-color" content="#16385f" />
-  <title>VolleyMotion Lab 1.0</title>
-  <link rel="stylesheet" href="styles.css" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b2140">
+<title>VolleyVision AI 2.0</title>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header class="hero">
-    <div>
-      <p class="eyebrow">HAND × CONTACT × TRAJECTORY</p>
-      <h1>VolleyMotion Lab <span>1.0</span></h1>
-      <p>30fps動画で、手の当て方とボール軌道を比較する探究用アプリ</p>
+<header class="topbar">
+  <div>
+    <p class="kicker">HAND × CONTACT × TRAJECTORY</p>
+    <h1>VolleyVision AI</h1>
+    <p class="tagline">見えない技術を、見えるデータへ。</p>
+  </div>
+  <div class="privacy">🔒 端末内解析</div>
+</header>
+
+<main class="app-shell">
+  <nav class="steps" aria-label="進行状況">
+    <button class="step active" data-go="upload"><span>1</span>動画</button>
+    <button class="step" data-go="review" disabled><span>2</span>打点</button>
+    <button class="step" data-go="mark" disabled><span>3</span>接触</button>
+    <button class="step" data-go="result" disabled><span>4</span>結果</button>
+  </nav>
+
+  <section id="screen-upload" class="screen active">
+    <div class="hero-card">
+      <div class="hero-icon">🏐</div>
+      <h2>サーブ動画を選ぶ</h2>
+      <p>30fpsのMP4でOK。動画は外部へ送信しません。</p>
+      <label class="pick-button" for="videoInput">🎥 動画を選ぶ</label>
+      <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.webm,.m4v">
+      <div id="dropZone" class="drop-zone" tabindex="0">または、動画をここへドロップ</div>
+      <p id="uploadMessage" class="message"></p>
     </div>
-    <div class="badge">端末内で処理</div>
-  </header>
+  </section>
 
-  <main>
-    <section class="card" id="step1">
-      <div class="section-head">
-        <div><p class="step">STEP 1</p><h2>動画を読み込む</h2></div>
-        <span id="loadState" class="status muted">未読込</span>
+  <section id="screen-review" class="screen">
+    <div class="screen-head">
+      <div><span class="eyebrow">STEP 2</span><h2>打点を確認</h2></div>
+      <button id="changeVideo" class="ghost">動画を変更</button>
+    </div>
+
+    <div class="video-card">
+      <div id="stage" class="stage">
+        <video id="video" playsinline preload="metadata"></video>
+        <canvas id="overlay"></canvas>
+        <div id="loadingCover" class="loading-cover hidden"><div class="spinner"></div><b>動画を準備しています</b></div>
       </div>
-
-      <label id="dropZone" class="drop-zone" for="videoInput" tabindex="0">
-        <input id="videoInput" type="file" accept="video/mp4,video/webm,video/quicktime,video/*" />
-        <div class="drop-icon">🎥</div>
-        <strong>動画をここへドロップ</strong>
-        <span>またはクリックして選択</span>
-        <span class="button-like">動画ファイルを選ぶ</span>
-        <small>MP4推奨・30fpsで解析可能。動画は外部へ送信しません。</small>
-      </label>
-      <div id="fileInfo" class="file-info hidden"></div>
-    </section>
-
-    <section class="card hidden" id="workspace">
-      <div class="section-head">
-        <div><p class="step">STEP 2</p><h2>接触場面を決める</h2></div>
-        <span id="analysisState" class="status">準備完了</span>
+      <div class="transport">
+        <button id="prevFrame" aria-label="1コマ戻る">◀ 1コマ</button>
+        <button id="playPause" class="play">▶ 再生</button>
+        <button id="nextFrame" aria-label="1コマ進む">1コマ ▶</button>
       </div>
+      <input id="timeline" class="timeline" type="range" min="0" max="1000" value="0">
+      <div class="time-line"><span id="timeNow">0.00秒</span><span id="frameNow">0コマ</span><span id="timeEnd">0.00秒</span></div>
+    </div>
 
-      <div class="workspace-grid">
-        <div>
-          <div id="stage" class="stage">
-            <video id="video" playsinline preload="metadata"></video>
-            <canvas id="overlay"></canvas>
-          </div>
+    <div class="action-card">
+      <h3>ボールに触れた瞬間で止めてください</h3>
+      <p>再生速度は0.25倍です。コマ送りで微調整できます。</p>
+      <button id="setContact" class="primary large">この瞬間を打点にする</button>
+      <p id="contactStatus" class="message"></p>
+    </div>
+  </section>
 
-          <div class="controls">
-            <button id="playBtn" type="button">▶ 再生</button>
-            <button id="prevFrameBtn" type="button">◀ 1コマ</button>
-            <button id="nextFrameBtn" type="button">1コマ ▶</button>
-            <label>速度
-              <select id="speedSelect">
-                <option value="0.25">0.25×</option>
-                <option value="0.5">0.5×</option>
-                <option value="1" selected>1×</option>
-              </select>
-            </label>
-          </div>
+  <section id="screen-mark" class="screen">
+    <div class="screen-head">
+      <div><span class="eyebrow">STEP 3</span><h2>手とボールを確認</h2></div>
+      <button id="backReview" class="ghost">打点に戻る</button>
+    </div>
 
-          <input id="timeline" class="timeline" type="range" min="0" max="1000" value="0" />
-          <div class="time-row">
-            <span id="currentTime">0.000秒</span>
-            <span id="frameNo">0コマ</span>
-            <span id="duration">0.000秒</span>
-          </div>
+    <div class="mark-layout">
+      <div class="video-card compact">
+        <div id="markStage" class="stage">
+          <canvas id="markCanvas"></canvas>
         </div>
-
-        <aside class="panel">
-          <label>動画のfps
-            <input id="fpsInput" type="number" value="30" min="1" max="240" step="1" />
-          </label>
-          <label>ボール半径（px）
-            <input id="ballRadiusInput" type="number" value="18" min="5" max="80" step="1" />
-          </label>
-          <label>追跡するコマ数
-            <input id="trackFramesInput" type="number" value="18" min="4" max="60" step="1" />
-          </label>
-          <button id="setContactFrameBtn" class="primary" type="button">現在を接触フレームに設定</button>
-          <p id="contactFrameText" class="hint">接触フレーム：未設定</p>
-        </aside>
-      </div>
-    </section>
-
-    <section class="card hidden" id="markingSection">
-      <div class="section-head">
-        <div><p class="step">STEP 3</p><h2>必要な点を打つ</h2></div>
-        <span class="status">クリックで指定</span>
+        <p class="small-note">画面の案内に従って、順番にクリックしてください。</p>
       </div>
 
-      <div class="mark-grid">
-        <button class="mark-btn" data-mode="ball"><b>① ボール中心</b><span>接触時のボール中心</span></button>
-        <button class="mark-btn" data-mode="contact"><b>② 接触点</b><span>手が触れている位置</span></button>
-        <button class="mark-btn" data-mode="wristBefore"><b>③ 直前の手首</b><span>1コマ前の位置</span></button>
-        <button class="mark-btn" data-mode="wristContact"><b>④ 接触時の手首</b><span>接触時の位置</span></button>
-        <button class="mark-btn" data-mode="indexBase"><b>⑤ 人差し指付け根</b><span>手のひら角度用</span></button>
-        <button class="mark-btn" data-mode="pinkyBase"><b>⑥ 小指付け根</b><span>手のひら角度用</span></button>
-      </div>
-
-      <div class="action-row">
-        <button id="clearMarksBtn" type="button">点をリセット</button>
-        <button id="autoTrackBtn" class="primary" type="button" disabled>ボールを自動追跡</button>
-        <button id="calculateBtn" class="accent" type="button" disabled>結果を計算</button>
-      </div>
-      <p id="markingHelp" class="hint">まず「ボール中心」を押し、動画上のボール中心をクリックしてください。</p>
-    </section>
-
-    <section class="card hidden" id="resultsSection">
-      <div class="section-head">
-        <div><p class="step">STEP 4</p><h2>解析結果</h2></div>
-        <span id="qualityBadge" class="status">計算済み</span>
-      </div>
-
-      <div id="metrics" class="metrics"></div>
-
-      <div class="results-grid">
-        <div>
-          <h3>接触条件</h3>
-          <canvas id="contactDiagram" width="480" height="320"></canvas>
-        </div>
-        <div>
-          <h3>ボール軌道</h3>
-          <canvas id="trajectoryChart" width="480" height="320"></canvas>
+      <div class="guide-card">
+        <div id="guideNumber" class="guide-number">1</div>
+        <h3 id="guideTitle">ボールの中心をクリック</h3>
+        <p id="guideText">接触時のボールの中心を選びます。</p>
+        <div class="progress"><span id="markProgress"></span></div>
+        <div class="guide-actions">
+          <button id="undoMark" class="ghost" disabled>1つ戻す</button>
+          <button id="finishMarks" class="primary" disabled>軌道を解析する</button>
         </div>
       </div>
+    </div>
+  </section>
 
-      <div class="action-row">
-        <button id="saveServeBtn" class="primary" type="button">このサーブを比較に追加</button>
-        <button id="downloadCsvBtn" type="button">CSVを保存</button>
-      </div>
+  <section id="screen-result" class="screen">
+    <div class="screen-head">
+      <div><span class="eyebrow">STEP 4</span><h2>解析結果</h2></div>
+      <button id="reanalyze" class="ghost">やり直す</button>
+    </div>
+
+    <div id="qualityNotice" class="quality-notice"></div>
+    <div id="metricCards" class="metrics"></div>
+
+    <div class="result-grid">
+      <article class="chart-card">
+        <h3>接触の見え方</h3>
+        <canvas id="contactChart" width="720" height="420"></canvas>
+      </article>
+      <article class="chart-card">
+        <h3>ボール軌道</h3>
+        <canvas id="trajectoryChart" width="720" height="420"></canvas>
+      </article>
+    </div>
+
+    <article class="insight-card">
+      <h3>観察メモ</h3>
+      <p id="insightText"></p>
+    </article>
+
+    <div class="result-actions">
+      <button id="saveComparison" class="primary">このサーブを比較に保存</button>
+      <button id="downloadCsv" class="ghost">CSVを保存</button>
+      <button id="newVideo" class="ghost">別の動画を解析</button>
+    </div>
+
+    <section id="comparisonSection" class="comparison hidden">
+      <div class="screen-head"><div><span class="eyebrow">COMPARE</span><h2>サーブ比較</h2></div><button id="clearComparison" class="ghost">比較を消去</button></div>
+      <div class="table-wrap"><table><thead><tr><th>No.</th><th>進入角</th><th>手のひら</th><th>接触位置</th><th>打ち出し</th><th>左右変化</th><th>落下傾向</th></tr></thead><tbody id="comparisonBody"></tbody></table></div>
     </section>
+  </section>
+</main>
 
-    <section class="card hidden" id="compareSection">
-      <div class="section-head">
-        <div><p class="step">STEP 5</p><h2>サーブ比較</h2></div>
-        <button id="clearCompareBtn" type="button">比較を消去</button>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>No.</th><th>手の進入角</th><th>手のひら角</th><th>接触位置</th><th>打ち出し角</th><th>左右変化</th><th>落下傾向</th></tr></thead>
-          <tbody id="compareBody"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="card note-card">
-      <h2>この版で確実にできること</h2>
-      <p>動画読込、ドラッグ＆ドロップ、再生、コマ送り、接触フレーム設定、点の記録、ボールの自動追跡、角度・軌道計算、比較、CSV保存です。外部AIが読み込めなくても、これらは動作します。</p>
-    </section>
-  </main>
-
-  <canvas id="processor" class="hidden"></canvas>
-  <script src="app.js" defer></script>
+<canvas id="processor" class="hidden"></canvas>
+<script src="app.js" defer></script>
 </body>
 </html>
