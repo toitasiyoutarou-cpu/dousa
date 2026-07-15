@@ -1,13 +1,15 @@
-VolleyVision AI 3.0（GitHub Pages用）
+VolleyVision AI Pro 4.0 - GitHub Pages用
 
-使い方
-1. このZIPを展開します。
-2. 中にある index.html / assets / wasm / README.txt を、GitHubリポジトリの一番上へアップロードします。
-3. Settings → Pages → Deploy from a branch → main / (root) を選びます。
-4. 反映後、GitHub PagesのURLを開きます。
+このフォルダ内の index.html / assets / wasm / README.txt を、GitHubリポジトリの一番上へアップロードしてください。
+GitHub Pages: Branch main / Folder /(root)
 
-重要
-- ZIPフォルダごとではなく、中身をリポジトリ直下へ置いてください。
-- 初回のAIモデル取得にはインターネット接続が必要です。
-- 動画は端末内で処理されます。
-- 30fpsでは打点は「最も近い候補フレーム」です。
+操作:
+1. 動画を選ぶ
+2. AI解析を開始
+3. 打点候補を確認
+4. ボール中心を1回クリック
+5. 軌道・接触・回転を解析
+6. 3Dビューをドラッグして360度回転
+
+注意:
+回転数・接触位置・奥行きは30fps単眼動画からのAI推定です。測定値と推定値は画面上で分けて表示します。
