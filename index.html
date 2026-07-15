@@ -1,137 +1,160 @@
 <!doctype html>
 <html lang="ja">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0b2140">
-<title>VolleyVision AI 2.0</title>
-<link rel="stylesheet" href="styles.css">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>VolleyVision AI 2.1</title>
+<style>
+:root{--bg:#f4f7fb;--card:#fff;--ink:#14213d;--muted:#65758b;--accent:#2864dc;--accent2:#13a66b;--danger:#d64545;--line:#dbe4ef;--shadow:0 14px 40px rgba(28,55,90,.10)}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","Noto Sans JP",sans-serif;background:linear-gradient(180deg,#edf4ff,#f8fafc 40%);color:var(--ink)}
+header{padding:26px 18px 10px;text-align:center}h1{margin:0;font-size:clamp(26px,5vw,44px)}header p{margin:7px 0;color:var(--muted)}
+main{width:min(1040px,94vw);margin:auto;padding-bottom:50px}.step{display:none}.step.active{display:block}.card{background:var(--card);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);padding:20px;margin:14px 0}
+.hero{min-height:390px;display:grid;place-items:center;text-align:center}.drop{width:min(680px,100%);border:2px dashed #96add0;border-radius:22px;padding:48px 20px;background:#f9fbff;transition:.2s}.drop.drag{border-color:var(--accent);background:#edf4ff;transform:scale(1.01)}
+.icon{font-size:64px}.btn{appearance:none;border:0;border-radius:14px;padding:14px 20px;font-weight:800;font-size:16px;cursor:pointer;background:var(--accent);color:white;box-shadow:0 8px 20px rgba(40,100,220,.22)}.btn.secondary{background:#e9eff9;color:var(--ink);box-shadow:none}.btn.green{background:var(--accent2)}.btn.red{background:var(--danger)}.btn:disabled{opacity:.45;cursor:not-allowed}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.center{justify-content:center}.fileLabel{display:inline-block}.small{font-size:13px;color:var(--muted)}
+.stage{position:relative;width:100%;background:#101820;border-radius:18px;overflow:hidden;aspect-ratio:16/9}.stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.stage canvas{pointer-events:none}.stage.pick canvas{pointer-events:auto;cursor:crosshair}
+.toolbar{display:flex;gap:9px;flex-wrap:wrap;justify-content:center;margin-top:12px}.pill{padding:9px 12px;border-radius:999px;background:#eef3fa;color:#32445f;font-size:13px;font-weight:700}.status{padding:12px 14px;border-radius:14px;background:#eef5ff;color:#23456f;margin-top:12px}.status.error{background:#fff0f0;color:#8c2727}.status.ok{background:#ebfff5;color:#176342}
+.progress{height:12px;background:#e6edf7;border-radius:99px;overflow:hidden;margin:14px 0}.progress>div{height:100%;width:0;background:linear-gradient(90deg,#2864dc,#13a66b);transition:.2s}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.metric{padding:16px;border:1px solid var(--line);border-radius:16px;background:#fbfdff}.metric b{display:block;font-size:26px;margin-top:6px}.metric span{font-size:13px;color:var(--muted)}
+.contact{display:grid;grid-template-columns:1.25fr .75fr;gap:14px}.guide{padding:14px;border-radius:16px;background:#fff9e8;border:1px solid #f4d98f}.hidden{display:none!important}
+.ai-layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(270px,.75fr);gap:14px;align-items:start}
+.ai-hud{background:#0c1726;color:#e9f6ff;border:1px solid #28435f;border-radius:18px;padding:15px;box-shadow:inset 0 0 36px rgba(20,154,255,.08)}
+.hud-title{display:flex;justify-content:space-between;align-items:center;font-weight:900;letter-spacing:.08em;color:#7fdcff;margin-bottom:12px}.live-dot{width:9px;height:9px;border-radius:50%;background:#33ef8d;box-shadow:0 0 12px #33ef8d;display:inline-block;margin-right:7px;animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.35;transform:scale(.75)}}
+.scan-stage{position:relative}.scan-stage:after{content:"";position:absolute;left:0;right:0;height:2px;top:0;background:linear-gradient(90deg,transparent,#54eaff,transparent);box-shadow:0 0 13px #54eaff;animation:scan 2.3s linear infinite;pointer-events:none;opacity:.85}
+@keyframes scan{from{top:2%}to{top:98%}}
+.ai-steps{display:grid;gap:8px}.ai-task{display:grid;grid-template-columns:24px 1fr auto;gap:9px;align-items:center;padding:10px;border-radius:12px;background:#12243a;border:1px solid #243f5d;color:#9fb3c8}.ai-task.active{color:#fff;border-color:#3dbbe7;background:#12314a}.ai-task.done{color:#baffd8;border-color:#2a885c}.task-icon{font-size:17px}.task-state{font-size:11px;font-weight:900;letter-spacing:.06em}.hud-data{margin-top:12px;border-top:1px solid #28435f;padding-top:11px;display:grid;gap:7px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}.hud-line{display:flex;justify-content:space-between;gap:10px}.hud-line span:first-child{color:#7f9ab6}.hud-line strong{color:#eafaff;font-weight:700}.mini-bar{height:5px;background:#1d344b;border-radius:99px;overflow:hidden;margin-top:12px}.mini-bar div{height:100%;width:0;background:#55e8ff;box-shadow:0 0 8px #55e8ff}.analysis-note{font-size:12px;color:#8aa3bb;margin-top:10px;line-height:1.55}
+.detect-tag{position:absolute;left:12px;top:12px;background:rgba(4,17,31,.78);border:1px solid #3bd8ff;color:#c7f8ff;padding:7px 10px;border-radius:9px;font-size:12px;font-weight:800;pointer-events:none}
+.foot{text-align:center;color:var(--muted);font-size:12px;margin-top:20px}
+@media(max-width:760px){.ai-layout,.contact,.grid{grid-template-columns:1fr}.card{padding:14px}.hero{min-height:320px}.drop{padding:36px 14px}}
+</style>
 </head>
 <body>
-<header class="topbar">
-  <div>
-    <p class="kicker">HAND × CONTACT × TRAJECTORY</p>
-    <h1>VolleyVision AI</h1>
-    <p class="tagline">見えない技術を、見えるデータへ。</p>
+<header><h1>VolleyVision AI <span style="font-size:.42em;vertical-align:top;color:#2864dc">2.1</span></h1><p>見えない技術を、見えるデータへ。</p></header>
+<main>
+<section id="step1" class="step active">
+  <div class="card hero">
+    <div id="dropZone" class="drop" tabindex="0">
+      <div class="icon">🏐</div><h2>サーブ動画を選ぶ</h2>
+      <p>MP4 / MOV / WebM　30fpsでも解析できます</p>
+      <label class="fileLabel btn" for="fileInput">動画を選ぶ</label>
+      <input id="fileInput" type="file" accept="video/*" hidden />
+      <p class="small">または、この枠へ動画をドロップ</p>
+    </div>
   </div>
-  <div class="privacy">🔒 端末内解析</div>
-</header>
+</section>
 
-<main class="app-shell">
-  <nav class="steps" aria-label="進行状況">
-    <button class="step active" data-go="upload"><span>1</span>動画</button>
-    <button class="step" data-go="review" disabled><span>2</span>打点</button>
-    <button class="step" data-go="mark" disabled><span>3</span>接触</button>
-    <button class="step" data-go="result" disabled><span>4</span>結果</button>
-  </nav>
+<section id="step2" class="step">
+  <div class="card">
+    <div class="row" style="justify-content:space-between"><div><h2 style="margin:0">1. 動画を確認</h2><div id="fileInfo" class="small"></div></div><button id="changeVideo" class="btn secondary">動画を変更</button></div>
+    <div class="stage"><video id="video" controls playsinline preload="metadata"></video><canvas id="overlay"></canvas></div>
+    <div class="toolbar"><button id="backFrame" class="btn secondary">◀ 1コマ</button><button id="slowPlay" class="btn secondary">0.25倍再生</button><button id="nextFrame" class="btn secondary">1コマ ▶</button></div>
+    <div class="row center" style="margin-top:14px"><button id="startAI" class="btn green">🤖 AI解析を開始</button></div>
+    <div id="loadStatus" class="status">動画を確認したら「AI解析を開始」を押してください。</div>
+  </div>
+</section>
 
-  <section id="screen-upload" class="screen active">
-    <div class="hero-card">
-      <div class="hero-icon">🏐</div>
-      <h2>サーブ動画を選ぶ</h2>
-      <p>30fpsのMP4でOK。動画は外部へ送信しません。</p>
-      <label class="pick-button" for="videoInput">🎥 動画を選ぶ</label>
-      <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.webm,.m4v">
-      <div id="dropZone" class="drop-zone" tabindex="0">または、動画をここへドロップ</div>
-      <p id="uploadMessage" class="message"></p>
-    </div>
-  </section>
-
-  <section id="screen-review" class="screen">
-    <div class="screen-head">
-      <div><span class="eyebrow">STEP 2</span><h2>打点を確認</h2></div>
-      <button id="changeVideo" class="ghost">動画を変更</button>
-    </div>
-
-    <div class="video-card">
-      <div id="stage" class="stage">
-        <video id="video" playsinline preload="metadata"></video>
-        <canvas id="overlay"></canvas>
-        <div id="loadingCover" class="loading-cover hidden"><div class="spinner"></div><b>動画を準備しています</b></div>
-      </div>
-      <div class="transport">
-        <button id="prevFrame" aria-label="1コマ戻る">◀ 1コマ</button>
-        <button id="playPause" class="play">▶ 再生</button>
-        <button id="nextFrame" aria-label="1コマ進む">1コマ ▶</button>
-      </div>
-      <input id="timeline" class="timeline" type="range" min="0" max="1000" value="0">
-      <div class="time-line"><span id="timeNow">0.00秒</span><span id="frameNow">0コマ</span><span id="timeEnd">0.00秒</span></div>
-    </div>
-
-    <div class="action-card">
-      <h3>ボールに触れた瞬間で止めてください</h3>
-      <p>再生速度は0.25倍です。コマ送りで微調整できます。</p>
-      <button id="setContact" class="primary large">この瞬間を打点にする</button>
-      <p id="contactStatus" class="message"></p>
-    </div>
-  </section>
-
-  <section id="screen-mark" class="screen">
-    <div class="screen-head">
-      <div><span class="eyebrow">STEP 3</span><h2>手とボールを確認</h2></div>
-      <button id="backReview" class="ghost">打点に戻る</button>
-    </div>
-
-    <div class="mark-layout">
-      <div class="video-card compact">
-        <div id="markStage" class="stage">
-          <canvas id="markCanvas"></canvas>
+<section id="step3" class="step">
+  <div class="card">
+    <div class="row" style="justify-content:space-between"><div><h2 style="margin:0">2. AI解析中</h2><p id="analysisText" style="margin:7px 0 0">AIモデルを準備しています…</p></div><span class="pill"><span class="live-dot"></span>LIVE ANALYSIS</span></div>
+    <div class="progress"><div id="progressBar"></div></div>
+    <div class="ai-layout">
+      <div id="scanStage" class="stage scan-stage"><video id="analysisVideo" muted playsinline preload="auto"></video><canvas id="analysisCanvas"></canvas><div id="detectTag" class="detect-tag">AI VISION：準備中</div></div>
+      <aside class="ai-hud">
+        <div class="hud-title"><span>ANALYSIS MONITOR</span><span id="hudPercent">0%</span></div>
+        <div class="ai-steps">
+          <div id="taskModel" class="ai-task active"><span class="task-icon">⚙️</span><span>AIモデル</span><span class="task-state">LOADING</span></div>
+          <div id="taskPose" class="ai-task"><span class="task-icon">🦴</span><span>身体33点</span><span class="task-state">WAIT</span></div>
+          <div id="taskHand" class="ai-task"><span class="task-icon">✋</span><span>利き手</span><span class="task-state">WAIT</span></div>
+          <div id="taskImpact" class="ai-task"><span class="task-icon">⚡</span><span>打点候補</span><span class="task-state">WAIT</span></div>
         </div>
-        <p class="small-note">画面の案内に従って、順番にクリックしてください。</p>
-      </div>
-
-      <div class="guide-card">
-        <div id="guideNumber" class="guide-number">1</div>
-        <h3 id="guideTitle">ボールの中心をクリック</h3>
-        <p id="guideText">接触時のボールの中心を選びます。</p>
-        <div class="progress"><span id="markProgress"></span></div>
-        <div class="guide-actions">
-          <button id="undoMark" class="ghost" disabled>1つ戻す</button>
-          <button id="finishMarks" class="primary" disabled>軌道を解析する</button>
+        <div class="mini-bar"><div id="hudBar"></div></div>
+        <div class="hud-data">
+          <div class="hud-line"><span>FRAME</span><strong id="hudFrame">0 / 0</strong></div>
+          <div class="hud-line"><span>TIME</span><strong id="hudTime">0.00 s</strong></div>
+          <div class="hud-line"><span>POSE</span><strong id="hudPose">未検出</strong></div>
+          <div class="hud-line"><span>HAND</span><strong id="hudHand">未検出</strong></div>
+          <div class="hud-line"><span>WRIST (x,y)</span><strong id="hudWrist">—</strong></div>
+          <div class="hud-line"><span>処理速度</span><strong id="hudSpeed">—</strong></div>
         </div>
-      </div>
+        <div class="analysis-note">表示される骨格・座標・フレーム数は、実際に処理しているデータです。ボールは次の画面で1回指定して追跡します。</div>
+      </aside>
     </div>
-  </section>
+    <div id="aiStatus" class="status">初回はAIモデルの読み込みに少し時間がかかります。</div>
+  </div>
+</section>
 
-  <section id="screen-result" class="screen">
-    <div class="screen-head">
-      <div><span class="eyebrow">STEP 4</span><h2>解析結果</h2></div>
-      <button id="reanalyze" class="ghost">やり直す</button>
+<section id="step4" class="step">
+  <div class="card">
+    <h2>3. ボールを1回だけ指定</h2>
+    <div class="contact">
+      <div><div id="pickStage" class="stage pick"><video id="pickVideo" muted playsinline></video><canvas id="pickCanvas"></canvas></div></div>
+      <div class="guide"><b>ボールの中心をクリック</b><p>AIが推定した打点付近で停止しています。ボール中心を1回クリックすると、その後の軌道を自動追跡します。</p><div id="pickStatus" class="status">ボールをクリックしてください。</div></div>
     </div>
+    <div class="toolbar"><button id="pickBack" class="btn secondary">◀ 1コマ</button><button id="pickNext" class="btn secondary">1コマ ▶</button><button id="trackBall" class="btn green" disabled>軌道を解析する</button></div>
+  </div>
+</section>
 
-    <div id="qualityNotice" class="quality-notice"></div>
-    <div id="metricCards" class="metrics"></div>
-
-    <div class="result-grid">
-      <article class="chart-card">
-        <h3>接触の見え方</h3>
-        <canvas id="contactChart" width="720" height="420"></canvas>
-      </article>
-      <article class="chart-card">
-        <h3>ボール軌道</h3>
-        <canvas id="trajectoryChart" width="720" height="420"></canvas>
-      </article>
+<section id="step5" class="step">
+  <div class="card">
+    <div class="row" style="justify-content:space-between"><h2 style="margin:0">4. 解析結果</h2><button id="newAnalysis" class="btn secondary">別の動画を解析</button></div>
+    <div class="stage"><video id="resultVideo" controls playsinline></video><canvas id="resultCanvas"></canvas></div>
+    <div class="grid" style="margin-top:14px">
+      <div class="metric"><span>手の進入角度</span><b id="mHand">—</b></div>
+      <div class="metric"><span>打点候補</span><b id="mContact">—</b></div>
+      <div class="metric"><span>ボールの打ち出し角度</span><b id="mLaunch">—</b></div>
+      <div class="metric"><span>左右への変化</span><b id="mCurve">—</b></div>
+      <div class="metric"><span>落下傾向</span><b id="mDrop">—</b></div>
+      <div class="metric"><span>解析信頼度</span><b id="mConfidence">—</b></div>
     </div>
-
-    <article class="insight-card">
-      <h3>観察メモ</h3>
-      <p id="insightText"></p>
-    </article>
-
-    <div class="result-actions">
-      <button id="saveComparison" class="primary">このサーブを比較に保存</button>
-      <button id="downloadCsv" class="ghost">CSVを保存</button>
-      <button id="newVideo" class="ghost">別の動画を解析</button>
-    </div>
-
-    <section id="comparisonSection" class="comparison hidden">
-      <div class="screen-head"><div><span class="eyebrow">COMPARE</span><h2>サーブ比較</h2></div><button id="clearComparison" class="ghost">比較を消去</button></div>
-      <div class="table-wrap"><table><thead><tr><th>No.</th><th>進入角</th><th>手のひら</th><th>接触位置</th><th>打ち出し</th><th>左右変化</th><th>落下傾向</th></tr></thead><tbody id="comparisonBody"></tbody></table></div>
-    </section>
-  </section>
+    <div id="resultComment" class="status ok"></div>
+    <div class="row center" style="margin-top:14px"><button id="downloadCsv" class="btn">CSVを保存</button></div>
+  </div>
+</section>
+<div class="foot">動画は端末内で処理され、外部サーバーへ送信しません。AIモデルの初回取得にはインターネット接続が必要です。</div>
 </main>
-
-<canvas id="processor" class="hidden"></canvas>
-<script src="app.js" defer></script>
+<script type="module">
+const $=id=>document.getElementById(id);
+const state={url:null,file:null,fps:30,pose:null,hand:null,frames:[],contactTime:0,ball:null,track:[],result:null,landmarkerReady:false};
+const steps=[1,2,3,4,5];
+function showStep(n){steps.forEach(i=>$('step'+i).classList.toggle('active',i===n));scrollTo({top:0,behavior:'smooth'})}
+function status(el,msg,type=''){el.textContent=msg;el.className='status '+type}
+function prevent(e){e.preventDefault();e.stopPropagation()}
+['dragenter','dragover','dragleave','drop'].forEach(t=>window.addEventListener(t,prevent,false));
+const dz=$('dropZone');['dragenter','dragover'].forEach(t=>dz.addEventListener(t,()=>dz.classList.add('drag')));['dragleave','drop'].forEach(t=>dz.addEventListener(t,()=>dz.classList.remove('drag')));
+dz.addEventListener('drop',e=>{const f=e.dataTransfer.files?.[0];if(f)loadFile(f)});dz.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' ')$('fileInput').click()});$('fileInput').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)loadFile(f)});
+function loadFile(file){if(!file.type.startsWith('video/'))return alert('動画ファイルを選んでください。');if(state.url)URL.revokeObjectURL(state.url);state.file=file;state.url=URL.createObjectURL(file);['video','analysisVideo','pickVideo','resultVideo'].forEach(id=>$(id).src=state.url);$('fileInfo').textContent=`${file.name}・${(file.size/1024/1024).toFixed(1)}MB`;showStep(2);$('video').onloadedmetadata=()=>{resizeAll();status($('loadStatus'),`読込成功：${$('video').videoWidth}×${$('video').videoHeight}／${$('video').duration.toFixed(2)}秒`,'ok')}}
+function resizeCanvas(video,canvas){const w=video.videoWidth||1280,h=video.videoHeight||720;canvas.width=w;canvas.height=h}
+function resizeAll(){[['video','overlay'],['analysisVideo','analysisCanvas'],['pickVideo','pickCanvas'],['resultVideo','resultCanvas']].forEach(([v,c])=>resizeCanvas($(v),$(c)))}
+$('changeVideo').onclick=$('newAnalysis').onclick=()=>{state.frames=[];state.track=[];$('fileInput').value='';showStep(1)};
+function seekBy(v,delta){v.currentTime=Math.max(0,Math.min(v.duration||0,v.currentTime+delta))}
+$('backFrame').onclick=()=>seekBy($('video'),-1/state.fps);$('nextFrame').onclick=()=>seekBy($('video'),1/state.fps);$('slowPlay').onclick=()=>{const v=$('video');v.playbackRate=.25;v.paused?v.play():v.pause()};
+async function initAI(){if(state.landmarkerReady)return;setTask('taskModel','active','LOADING');$('detectTag').textContent='AI VISION：モデル読込中';status($('aiStatus'),'AIモデルを読み込んでいます…');const vision=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm');const fileset=await vision.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm');state.pose=await vision.PoseLandmarker.createFromOptions(fileset,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',delegate:'GPU'},runningMode:'VIDEO',numPoses:1,minPoseDetectionConfidence:.45,minPosePresenceConfidence:.45,minTrackingConfidence:.45});state.hand=await vision.HandLandmarker.createFromOptions(fileset,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',delegate:'GPU'},runningMode:'VIDEO',numHands:2,minHandDetectionConfidence:.35,minHandPresenceConfidence:.35,minTrackingConfidence:.35});state.landmarkerReady=true;setTask('taskModel','done','READY');setTask('taskPose','active','SCANNING');$('detectTag').textContent='AI VISION：人物を探索中';status($('aiStatus'),'AIモデルを読み込みました。実動画の解析を開始します。','ok')}
+function waitSeek(v,t){return new Promise((res,rej)=>{const fn=()=>{v.removeEventListener('seeked',fn);res()};v.addEventListener('seeked',fn);v.currentTime=Math.min(Math.max(t,0),Math.max(0,(v.duration||0)-.001));setTimeout(()=>{v.removeEventListener('seeked',fn);res()},700)})}
+function pt(lm,i,w,h){return lm?.[i]?{x:lm[i].x*w,y:lm[i].y*h,z:lm[i].z,vis:lm[i].visibility??1}:null}
+function dist(a,b){return a&&b?Math.hypot(a.x-b.x,a.y-b.y):99999}
+function angle(a,b){return Math.atan2(-(b.y-a.y),b.x-a.x)*180/Math.PI}
+function setTask(id,state,label){const el=$(id);el.classList.remove('active','done');if(state)el.classList.add(state);const st=el.querySelector('.task-state');if(st)st.textContent=label}
+function drawDetectionBox(ctx,pose,w,h){if(!pose)return;const points=pose.map((p,i)=>({x:p.x*w,y:p.y*h,v:p.visibility??1})).filter(p=>p.v>.3);if(!points.length)return;const xs=points.map(p=>p.x),ys=points.map(p=>p.y),pad=18;const x=Math.max(0,Math.min(...xs)-pad),y=Math.max(0,Math.min(...ys)-pad),rw=Math.min(w-x,Math.max(...xs)-Math.min(...xs)+pad*2),rh=Math.min(h-y,Math.max(...ys)-Math.min(...ys)+pad*2);ctx.save();ctx.strokeStyle='#39e6ff';ctx.lineWidth=Math.max(2,w/500);ctx.setLineDash([12,7]);ctx.strokeRect(x,y,rw,rh);ctx.setLineDash([]);ctx.fillStyle='rgba(8,29,48,.78)';ctx.fillRect(x,y-25,118,23);ctx.fillStyle='#aef7ff';ctx.font=`bold ${Math.max(12,w/90)}px system-ui`;ctx.fillText('PERSON LOCK',x+7,y-8);ctx.restore()}
+function drawHand(ctx,hand,w,h){if(!hand)return;const pairs=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],[0,17],[17,18],[18,19],[19,20],[5,9],[9,13],[13,17]];ctx.save();ctx.strokeStyle='#ffe45b';ctx.lineWidth=Math.max(2,w/600);pairs.forEach(([a,b])=>{const A=hand[a],B=hand[b];if(A&&B){ctx.beginPath();ctx.moveTo(A.x*w,A.y*h);ctx.lineTo(B.x*w,B.y*h);ctx.stroke()}});ctx.fillStyle='#ffef91';hand.forEach(p=>{ctx.beginPath();ctx.arc(p.x*w,p.y*h,Math.max(2,w/500),0,Math.PI*2);ctx.fill()});ctx.restore()}
+function drawPose(ctx,lm,w,h){if(!lm)return;const pairs=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28]];ctx.strokeStyle='#31e3ff';ctx.lineWidth=Math.max(3,w/400);pairs.forEach(([a,b])=>{const A=pt(lm,a,w,h),B=pt(lm,b,w,h);if(A&&B){ctx.beginPath();ctx.moveTo(A.x,A.y);ctx.lineTo(B.x,B.y);ctx.stroke()}});ctx.fillStyle='#fff';[11,12,13,14,15,16,23,24,25,26,27,28].forEach(i=>{const p=pt(lm,i,w,h);if(p){ctx.beginPath();ctx.arc(p.x,p.y,4,0,7);ctx.fill()}})}
+$('startAI').onclick=async()=>{showStep(3);const v=$('analysisVideo'),c=$('analysisCanvas'),ctx=c.getContext('2d');const started=performance.now();try{await initAI();await new Promise(r=>v.readyState>=1?r():v.addEventListener('loadedmetadata',r,{once:true}));resizeCanvas(v,c);const dur=v.duration;const samples=Math.min(90,Math.max(30,Math.floor(dur*12)));state.frames=[];$('hudFrame').textContent=`0 / ${samples}`;let lastTs=-1,poseCount=0,handCount=0;for(let i=0;i<samples;i++){const t=(dur*.08)+(dur*.84)*(i/(samples-1));await waitSeek(v,t);const ts=Math.max(lastTs+1,Math.round(t*1000));lastTs=ts;const poseRes=state.pose.detectForVideo(v,ts);const handRes=state.hand.detectForVideo(v,ts);const pose=poseRes.landmarks?.[0]||null;let hands=handRes.landmarks||[];const w=c.width,h=c.height;ctx.clearRect(0,0,w,h);ctx.fillStyle='rgba(0,20,35,.08)';ctx.fillRect(0,0,w,h);drawPose(ctx,pose,w,h);drawDetectionBox(ctx,pose,w,h);let activeWrist=null,handPts=null;if(pose){poseCount++;const lw=pt(pose,15,w,h),rw=pt(pose,16,w,h);activeWrist=(lw&&rw)?(lw.y<rw.y?lw:rw):(lw||rw)}if(hands.length){handPts=hands.sort((A,B)=>{const a={x:A[0].x*w,y:A[0].y*h},b={x:B[0].x*w,y:B[0].y*h};return dist(a,activeWrist)-dist(b,activeWrist)})[0];handCount++;drawHand(ctx,handPts,w,h)}const wrist=activeWrist;state.frames.push({t,pose,hand:handPts,wrist});const pct=Math.round(((i+1)/samples)*100);$('progressBar').style.width=pct+'%';$('hudBar').style.width=pct+'%';$('hudPercent').textContent=pct+'%';$('hudFrame').textContent=`${i+1} / ${samples}`;$('hudTime').textContent=t.toFixed(2)+' s';$('hudPose').textContent=pose?`検出 (${poseCount})`:'探索中';$('hudHand').textContent=handPts?`検出 (${handCount})`:'探索中';$('hudWrist').textContent=wrist?`${Math.round(wrist.x)}, ${Math.round(wrist.y)}`:'—';const elapsed=(performance.now()-started)/1000;$('hudSpeed').textContent=(elapsed>0?((i+1)/elapsed).toFixed(1):'—')+' frame/s';$('analysisText').textContent=`${i+1}/${samples}フレーム：${pose?'身体を検出':'人物を探索'}${handPts?'・手を検出':''}`;$('detectTag').textContent=handPts?'HAND + POSE LOCK':pose?'POSE LOCK / HAND SEARCH':'PERSON SEARCH';if(pose&&i>3)setTask('taskPose','done','DETECTED');if(pose&&!handPts)setTask('taskHand','active','SCANNING');if(handPts)setTask('taskHand','done','DETECTED');await new Promise(r=>setTimeout(r,0))}
+setTask('taskImpact','active','CALCULATING');$('analysisText').textContent='手首の速度と高さから打点候補を計算しています…';$('detectTag').textContent='IMPACT CALCULATION';let best=state.frames[0],bestScore=-1;for(let i=1;i<state.frames.length;i++){const f=state.frames[i],p=state.frames[i-1];if(!f.wrist||!p.wrist)continue;const speed=dist(f.wrist,p.wrist)/(f.t-p.t+.001);const height=1-f.wrist.y/c.height;const score=speed*120+height*2;if(score>bestScore){bestScore=score;best=f}}state.contactTime=best?.t||dur/2;setTask('taskImpact','done','FOUND');$('hudPercent').textContent='100%';$('detectTag').textContent=`IMPACT CANDIDATE ${state.contactTime.toFixed(2)}s`;$('analysisText').textContent=`解析完了：打点候補 ${state.contactTime.toFixed(2)}秒`;status($('aiStatus'),`解析完了。身体 ${poseCount}/${samples}、手 ${handCount}/${samples} フレームを検出しました。次にボールを1回指定します。`,'ok');await new Promise(r=>setTimeout(r,650));preparePicker();showStep(4)}catch(err){console.error(err);status($('aiStatus'),'AI読み込みに失敗しました。ネット接続、広告ブロッカー、GitHub Pagesの公開状態を確認してください。詳細: '+err.message,'error');$('analysisText').textContent='解析を開始できませんでした。';$('detectTag').textContent='AI ERROR';setTask('taskModel','','ERROR')}};
+function preparePicker(){const v=$('pickVideo'),c=$('pickCanvas');v.onloadedmetadata=async()=>{resizeCanvas(v,c);await waitSeek(v,state.contactTime);drawPicker()};if(v.readyState>=1){resizeCanvas(v,c);waitSeek(v,state.contactTime).then(drawPicker)}}
+function nearestFrame(t){return state.frames.reduce((a,b)=>Math.abs(b.t-t)<Math.abs(a.t-t)?b:a,state.frames[0])}
+function drawPicker(){const v=$('pickVideo'),c=$('pickCanvas'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);const f=nearestFrame(v.currentTime);drawPose(ctx,f?.pose,c.width,c.height);if(f?.wrist){ctx.strokeStyle='#ff9f1c';ctx.lineWidth=5;ctx.beginPath();ctx.arc(f.wrist.x,f.wrist.y,12,0,7);ctx.stroke()}if(state.ball){ctx.strokeStyle='#ff3b3b';ctx.lineWidth=5;ctx.beginPath();ctx.arc(state.ball.x,state.ball.y,state.ball.r,0,7);ctx.stroke()}}
+$('pickCanvas').addEventListener('click',e=>{const c=$('pickCanvas'),r=c.getBoundingClientRect();state.ball={x:(e.clientX-r.left)*c.width/r.width,y:(e.clientY-r.top)*c.height/r.height,r:Math.max(10,c.width*.014)};drawPicker();$('trackBall').disabled=false;status($('pickStatus'),'ボールを指定しました。「軌道を解析する」を押してください。','ok')});
+$('pickBack').onclick=async()=>{await waitSeek($('pickVideo'),$('pickVideo').currentTime-1/state.fps);state.contactTime=$('pickVideo').currentTime;drawPicker()};$('pickNext').onclick=async()=>{await waitSeek($('pickVideo'),$('pickVideo').currentTime+1/state.fps);state.contactTime=$('pickVideo').currentTime;drawPicker()};
+function cropGray(video,cx,cy,r,size=32){const c=document.createElement('canvas');c.width=size;c.height=size;const x=Math.max(0,cx-r),y=Math.max(0,cy-r),w=Math.min(video.videoWidth-x,r*2),h=Math.min(video.videoHeight-y,r*2);c.getContext('2d').drawImage(video,x,y,w,h,0,0,size,size);const d=c.getContext('2d').getImageData(0,0,size,size).data,out=new Float32Array(size*size);for(let i=0,j=0;i<d.length;i+=4,j++)out[j]=.299*d[i]+.587*d[i+1]+.114*d[i+2];return out}
+function sad(a,b){let s=0;for(let i=0;i<a.length;i++)s+=Math.abs(a[i]-b[i]);return s/a.length}
+async function trackBall(){const v=$('pickVideo'),start=state.contactTime,dur=v.duration,c=$('pickCanvas'),r=state.ball.r;await waitSeek(v,start);let pos={x:state.ball.x,y:state.ball.y};let templ=cropGray(v,pos.x,pos.y,r);const out=[];const n=Math.min(36,Math.floor((dur-start)*state.fps));for(let i=0;i<n;i++){const t=start+i/state.fps;await waitSeek(v,t);let best={score:1e9,x:pos.x,y:pos.y};const search=Math.max(14,r*1.8),step=Math.max(3,r/4);for(let dy=-search;dy<=search;dy+=step)for(let dx=-search;dx<=search;dx+=step){const x=pos.x+dx,y=pos.y+dy;if(x<r||y<r||x>v.videoWidth-r||y>v.videoHeight-r)continue;const s=sad(templ,cropGray(v,x,y,r));if(s<best.score)best={score:s,x,y}}pos={x:best.x,y:best.y};out.push({t,x:pos.x,y:pos.y,q:Math.max(0,1-best.score/90)});const now=cropGray(v,pos.x,pos.y,r);for(let k=0;k<templ.length;k++)templ[k]=templ[k]*.85+now[k]*.15}
+state.track=out;calculateResult();prepareResult();showStep(5)}
+$('trackBall').onclick=()=>{status($('pickStatus'),'ボールを追跡しています…');$('trackBall').disabled=true;trackBall().catch(e=>{console.error(e);status($('pickStatus'),'追跡に失敗しました: '+e.message,'error');$('trackBall').disabled=false})};
+function linfit(arr,key){const n=arr.length;if(n<2)return 0;let sx=0,sy=0,sxx=0,sxy=0;arr.forEach((p,i)=>{sx+=i;sy+=p[key];sxx+=i*i;sxy+=i*p[key]});return(n*sxy-sx*sy)/(n*sxx-sx*sx||1)}
+function calculateResult(){const tr=state.track,first=tr.slice(0,Math.min(6,tr.length)),last=tr.slice(-Math.min(6,tr.length));const vx=linfit(first,'x'),vy=linfit(first,'y');const launch=Math.atan2(-vy,vx)*180/Math.PI;const predEnd={x:tr[0].x+vx*(tr.length-1),y:tr[0].y+vy*(tr.length-1)};const end=tr.at(-1);const curve=(end.x-predEnd.x)/(Math.max(1,$('pickCanvas').width))*100;const drop=(end.y-predEnd.y)/(Math.max(1,$('pickCanvas').height))*100;const f=nearestFrame(state.contactTime),prev=nearestFrame(Math.max(0,state.contactTime-.1));let handAngle=null;if(f?.wrist&&prev?.wrist)handAngle=angle(prev.wrist,f.wrist);const q=tr.reduce((s,p)=>s+p.q,0)/Math.max(1,tr.length);state.result={handAngle,contactTime:state.contactTime,launch,curve,drop,confidence:q};$('mHand').textContent=handAngle==null?'判定困難':handAngle.toFixed(1)+'°';$('mContact').textContent=state.contactTime.toFixed(2)+'秒';$('mLaunch').textContent=launch.toFixed(1)+'°';$('mCurve').textContent=(curve>=0?'右へ ':'左へ ')+Math.abs(curve).toFixed(1)+'%';$('mDrop').textContent=(drop>=0?'下方へ ':'上方へ ')+Math.abs(drop).toFixed(1)+'%';$('mConfidence').textContent=q>.72?'高':q>.45?'中':'低';$('resultComment').textContent=`手の進入方向に対して、ボールは${curve>=0?'右':'左'}方向へ変化し、初期軌道より${drop>=0?'下へ落ちる':'上へ外れる'}傾向が見られました。30fps動画のため、接触位置・回転は参考評価として扱ってください。`}
+function prepareResult(){const v=$('resultVideo'),c=$('resultCanvas');v.onloadedmetadata=()=>{resizeCanvas(v,c);v.currentTime=state.contactTime;drawResult()};v.ontimeupdate=drawResult;if(v.readyState>=1){resizeCanvas(v,c);v.currentTime=state.contactTime;drawResult()}}
+function drawResult(){const v=$('resultVideo'),c=$('resultCanvas'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);const f=nearestFrame(v.currentTime);drawPose(ctx,f?.pose,c.width,c.height);if(state.track.length){ctx.strokeStyle='#ffdf3d';ctx.lineWidth=5;ctx.beginPath();state.track.forEach((p,i)=>{i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)});ctx.stroke();const p=state.track.reduce((a,b)=>Math.abs(b.t-v.currentTime)<Math.abs(a.t-v.currentTime)?b:a,state.track[0]);ctx.fillStyle='#ff3b3b';ctx.beginPath();ctx.arc(p.x,p.y,state.ball.r,0,7);ctx.fill()}}
+$('downloadCsv').onclick=()=>{const r=state.result;const rows=[['項目','値'],['ファイル',state.file?.name||''],['手の進入角度',r.handAngle??''],['打点候補秒',r.contactTime],['打ち出し角度',r.launch],['左右変化%',r.curve],['落下傾向%',r.drop],['信頼度',r.confidence],[],['time','x','y','quality'],...state.track.map(p=>[p.t,p.x,p.y,p.q])];const csv=rows.map(row=>row.map(v=>'"'+String(v).replaceAll('"','""')+'"').join(',')).join('\n');const b=new Blob(['\ufeff'+csv],{type:'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='volleyvision_result.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
+window.addEventListener('resize',resizeAll);
+</script>
 </body>
 </html>
