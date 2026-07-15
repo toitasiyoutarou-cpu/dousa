@@ -1,15 +1,17 @@
-VolleyVision AI Pro 4.0 - GitHub Pages用
+VolleyVision AI iPad 5.0
 
-このフォルダ内の index.html / assets / wasm / README.txt を、GitHubリポジトリの一番上へアップロードしてください。
-GitHub Pages: Branch main / Folder /(root)
+GitHub Pagesへの配置:
+1. このZIPを展開
+2. index.html / assets / wasm / README.txt をリポジトリ直下へアップロード
+3. Settings → Pages → main / root
+4. 公開URLをiPadのSafariで開く
 
-操作:
-1. 動画を選ぶ
-2. AI解析を開始
-3. 打点候補を確認
-4. ボール中心を1回クリック
-5. 軌道・接触・回転を解析
-6. 3Dビューをドラッグして360度回転
+特徴:
+- iPadの写真・ファイル・カメラから直接選択
+- 写真1枚と動画の両方に対応
+- 動画解析は最大60フレーム・640pxへ軽量化
+- 解析後だけ軽量3Dを起動
+- WebGLが使えない場合は2D立体表示へ自動切替
+- 回転数・奥行き・接触位置はAI推定として明示
 
-注意:
-回転数・接触位置・奥行きは30fps単眼動画からのAI推定です。測定値と推定値は画面上で分けて表示します。
+初回のAI解析時はモデル取得のためインターネット接続が必要です。
