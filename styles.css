@@ -366,3 +366,12 @@ footer { text-align: center; color: #718096; font-size: .8rem; padding: 0 20px 3
 
 .contact-visual-panel{overflow:hidden}.contact-visual-panel canvas{width:100%;height:auto;display:block;background:#071426;border:1px solid rgba(148,163,184,.25);border-radius:18px}.contact-legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:.86rem;color:#cbd5e1}.button.primary.small{background:linear-gradient(135deg,#16a34a,#0ea5e9);color:#fff}.auto-candidate{box-shadow:0 0 0 3px rgba(34,197,94,.28)}
 .file-picker-button{margin-top:14px;pointer-events:auto}.drop-zone.drag-over{background:#eef7ff;border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.12)}
+
+/* v5.2: native file picker; works even when app JavaScript or AI CDN is unavailable */
+.drop-zone { position: relative; cursor: pointer; }
+.native-file-input {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+.drop-zone:focus-within, .drop-zone:focus { outline: 4px solid rgba(37,99,235,.25); outline-offset: 3px; }
+.selected-file-name { display:block; margin-top:10px; font-weight:700; color:#0f766e; min-height:1.4em; }

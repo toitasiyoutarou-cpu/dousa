@@ -4,24 +4,25 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#10233f" />
-  <title>VolleyMotion Lab v5｜30fps サーブ自動接触・軌道解析</title>
+  <title>VolleyMotion Lab v5.2｜30fps サーブ自動接触・軌道解析</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <link rel="preconnect" href="https://storage.googleapis.com" crossorigin />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
 <header class="app-header">
-  <div><p class="eyebrow">HAND × CONTACT × TRAJECTORY</p><h1>VolleyMotion Lab v5</h1><p class="subtitle">30fps動画から、選手・打点・ボール候補を自動検出して比較</p></div>
+  <div><p class="eyebrow">HAND × CONTACT × TRAJECTORY</p><h1>VolleyMotion Lab v5.2</h1><p class="subtitle">30fps動画から、選手・打点・ボール候補を自動検出して比較</p></div>
   <div class="privacy-badge"><span>🔒</span><span>端末内解析</span></div>
 </header>
 <main class="app-shell">
 <section class="panel setup-panel">
   <div class="panel-heading"><div><p class="step-label">STEP 1</p><h2>動画と解析条件</h2></div><span id="modelStatus" class="status-pill status-idle">AI未準備</span></div>
-  <div id="dropZone" class="drop-zone" tabindex="0" role="button">
-    <input id="videoFile" type="file" accept="video/*,.mp4,.mov,.m4v,.webm" hidden />
-    <div class="drop-icon">🎥</div><strong>動画をここへドロップ</strong><span>または下のボタンから選択</span><button id="chooseVideoButton" type="button" class="button primary file-picker-button">動画ファイルを選ぶ</button>
+  <label id="dropZone" class="drop-zone" tabindex="0" for="videoFile">
+    <input id="videoFile" class="native-file-input" type="file" accept="video/*,.mp4,.mov,.m4v,.webm" />
+    <div class="drop-icon">🎥</div><strong>動画をここへドロップ</strong><span>または下のボタンから選択</span><span id="chooseVideoButton" class="button primary file-picker-button">動画ファイルを選ぶ</span>
+    <span id="selectedFileName" class="selected-file-name">未選択</span>
     <small>30fps対応。回転数ではなく、接触条件・打ち出し方向・左右変化・落下傾向を中心に分析します。</small>
-  </div>
+  </label>
   <div class="settings-grid">
     <label>利き腕<select id="handedness"><option value="left" selected>左利き（宮浦選手）</option><option value="right">右利き</option></select></label>
     <label>撮影方向<select id="viewDirection"><option value="rear" selected>後方</option><option value="side">側方</option><option value="diagonal">斜め後方</option></select></label>
