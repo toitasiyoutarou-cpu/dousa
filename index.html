@@ -19,7 +19,7 @@
   <div class="panel-heading"><div><p class="step-label">STEP 1</p><h2>動画と解析条件</h2></div><span id="modelStatus" class="status-pill status-idle">AI未準備</span></div>
   <div id="dropZone" class="drop-zone" tabindex="0" role="button">
     <input id="videoFile" type="file" accept="video/*,.mp4,.mov,.m4v,.webm" hidden />
-    <div class="drop-icon">🎥</div><strong>動画をここへドロップ</strong><span>またはクリックして選択</span>
+    <div class="drop-icon">🎥</div><strong>動画をここへドロップ</strong><span>または下のボタンから選択</span><button id="chooseVideoButton" type="button" class="button primary file-picker-button">動画ファイルを選ぶ</button>
     <small>30fps対応。回転数ではなく、接触条件・打ち出し方向・左右変化・落下傾向を中心に分析します。</small>
   </div>
   <div class="settings-grid">
